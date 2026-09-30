@@ -1,11 +1,11 @@
 <div align="center">
 
-# LuaSpider
+# GoRelay
 
-**Lua 规则驱动的多源数据采集平台**
+**Go 异步任务与数据服务平台**
 
-用 Go 管理任务生命周期，用 Lua 适配数据来源。<br>
-从异步采集、可靠投递到结构化快照与分析工作台。
+用 Go 串联任务提交、可靠投递、并发执行与结果查询。<br>
+以内容聚合为业务场景，提供可追踪、可恢复的任务链路与数据工作台。
 
 <p>
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.26">
@@ -21,7 +21,9 @@
 
 ---
 
-不同网站的页面结构会变化，但任务调度、并发控制和结果存储不应随之重写。LuaSpider 将这些能力沉淀为共享后端，站点差异交给 Lua 规则处理。
+GoRelay 面向内容聚合场景，提供任务提交、状态查询、结果读取和 Web 工作台。API、Publisher 与 Worker 分工处理请求受理、消息投递和任务执行，MySQL 保存任务与结果，Redis Streams 分发任务。
+
+后端通过 Outbox、消费组、执行租约和运行令牌处理消息补投、故障接管与重复消费；Lua 规则负责适配不同数据来源，复用同一套任务生命周期和结果存储。
 
 **GitHub Trending 与 Hacker News 是两个接入示例，而不是平台边界。** 在现有 HTTP / DOM 能力范围内，新增来源只需增加规则脚本与元数据，即可复用任务链路和结果展示。
 
@@ -179,7 +181,7 @@ docker compose down
 <summary>项目目录与职责</summary>
 
 ```text
-LuaSpider/
+GoRelay/
 ├── cmd/
 │   ├── server/        HTTP API 与静态工作台
 │   ├── publisher/     Outbox 发布进程
