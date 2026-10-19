@@ -22,7 +22,7 @@ type Processor struct {
 }
 
 // NewProcessor only stores validated dependencies; it does not process messages.
-func NewProcessor(client *redis.Client, cfg Config) (*Processor, error) {
+func NewProcessor(client *redis.Client, cfg Config, executors ...func(context.Context, taskmodel.CrawlTask) (repository.PersistTaskResult, error)) (*Processor, error) {
 	if client == nil {
 		return nil, fmt.Errorf("Redis client is required")
 	}
@@ -32,7 +32,11 @@ func NewProcessor(client *redis.Client, cfg Config) (*Processor, error) {
 	if cfg.ExecutionTimeout <= 0 {
 		cfg.ExecutionTimeout = 30 * time.Second
 	}
-	return &Processor{client: client, config: cfg, gate: make(chan struct{}, 1), execute: engine.ExecuteTask}, nil
+	execute := engine.ExecuteTask
+	if len(executors) > 0 && executors[0] != nil {
+		execute = executors[0]
+	}
+	return &Processor{client: client, config: cfg, gate: make(chan struct{}, 1), execute: execute}, nil
 }
 
 // ProcessNewMessage handles a message read with the special ">" stream ID.
@@ -64,8 +68,13 @@ func (processor *Processor) process(ctx context.Context, message redis.XMessage,
 	// Reserve ten seconds for completion inside the lease. Acquisition time
 	// consumes this absolute budget instead of granting a fresh lease afterward.
 	executionDeadline := time.Now().Add(processor.config.ExecutionTimeout + 5*time.Second)
+	leaseDuration := processor.config.ExecutionTimeout + 15*time.Second
+	if crawlTask.ProgramHash != "" && crawlTask.ExecutionDeadline != nil {
+		executionDeadline = *crawlTask.ExecutionDeadline
+		leaseDuration = max(time.Second, time.Until(executionDeadline)+10*time.Second)
+	}
 	claimCtx, stopClaim := context.WithTimeout(ctx, 5*time.Second)
-	token, err := repository.ClaimCrawlTask(claimCtx, crawlTask, processor.config.ExecutionTimeout+15*time.Second, reclaim)
+	token, err := repository.ClaimCrawlTask(claimCtx, crawlTask, leaseDuration, reclaim)
 	stopClaim()
 	if errors.Is(err, repository.ErrTaskTransitionConflict) {
 		// Another attempt owns the task. Keep this message pending; recovery

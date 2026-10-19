@@ -4,31 +4,26 @@ import (
 	"errors"
 	"fmt"
 	mysqldriver "github.com/go-sql-driver/mysql"
+	"go-lua-crawler/internal/agentdata"
 	"go-lua-crawler/internal/config"
+	"go-lua-crawler/internal/knowledge"
 	"go-lua-crawler/internal/logger"
 	taskmodel "go-lua-crawler/internal/task"
 	"go.uber.org/zap"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
+	"io"
+	"log"
+	"os"
 	"strings"
 	"time"
 )
 
 var DB *gorm.DB
 
-// GithubRepo 是抓取结果的持久化模型。Name 与 Source 共同构成业务唯一标识，
-// 允许未来接入其他数据源时保留同名仓库的独立记录。
-type GithubRepo struct {
-	ID          uint   `gorm:"primaryKey"`
-	Name        string `gorm:"type:varchar(500);uniqueIndex:idx_name_source;not null"`
-	Source      string `gorm:"type:varchar(50);uniqueIndex:idx_name_source;not null"`
-	Stars       int    `gorm:"default:0"`
-	Description string `gorm:"type:text"`
-}
-
 func InitDB() error {
-	// 数据库配置在启动时读取一次。GORM 连接成功后由全局 DB 供 handler、
-	// scheduler 和 engine 共享使用。
+	// 数据库配置在启动时读取一次。GORM 连接成功后由任务、分析和执行链路共享使用。
 	cfg := config.Get()
 
 	dsn := cfg.MySQL.DSN
@@ -54,7 +49,7 @@ func InitDB() error {
 		parsedDSN.WriteTimeout = 10 * time.Second
 	}
 	dsn = parsedDSN.FormatDSN()
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{TranslateError: true})
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{TranslateError: true, Logger: databaseLogger(os.Stderr)})
 	if err != nil {
 		return fmt.Errorf("open MySQL connection: %w", err)
 	}
@@ -69,10 +64,16 @@ func InitDB() error {
 
 	// AutoMigrate 会创建缺失的表和索引，但不会执行破坏性删除，
 	// 适合开发阶段保持模型与表结构同步。
-	if err := db.AutoMigrate(&GithubRepo{}, &taskmodel.CrawlTask{}, &taskmodel.TaskOutbox{}, &taskmodel.TaskEvent{}, &CrawlResult{}); err != nil {
+	if err := db.AutoMigrate(&taskmodel.CrawlTask{}, &taskmodel.TaskOutbox{}, &taskmodel.TaskEvent{}, &CrawlResult{}); err != nil {
 		return fmt.Errorf("建表失败: %w", err)
 	}
 	DB = db
+	if err := agentdata.NewStore(db).Migrate(); err != nil {
+		return fmt.Errorf("migrate Agent facts: %w", err)
+	}
+	if err := knowledge.NewStore(db).Migrate(); err != nil {
+		return fmt.Errorf("migrate knowledge index: %w", err)
+	}
 	logger.Log.Info("数据库表结构同步完成")
 	return nil
 }
@@ -81,4 +82,7 @@ func validateMySQLDSN(dsn string) error {
 		return errors.New("mysql.dsn is required")
 	}
 	return nil
+}
+func databaseLogger(output io.Writer) gormlogger.Interface {
+	return gormlogger.New(log.New(output, "", log.LstdFlags), gormlogger.Config{SlowThreshold: 200 * time.Millisecond, LogLevel: gormlogger.Warn, IgnoreRecordNotFoundError: true, ParameterizedQueries: true})
 }

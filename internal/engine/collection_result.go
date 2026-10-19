@@ -9,11 +9,7 @@ import (
 )
 
 func (result luaScriptResult) MarshalJSON() ([]byte, error) {
-	if result.Collection != nil {
-		return json.Marshal(result.Collection)
-	}
-	type legacy luaScriptResult
-	return json.Marshal(legacy(result))
+	return json.Marshal(result.Collection)
 }
 
 // Copy values while the owning VM is alive. Reject values JSON cannot represent.
@@ -89,7 +85,16 @@ func luaJSON(value lua.LValue, seen map[*lua.LTable]bool, depth int) (any, error
 }
 
 func decodeCollection(table *lua.LTable) (map[string]any, error) {
-	items, ok := table.RawGetString("items").(*lua.LTable)
+	// Top-level error is a documented program outcome, not a malformed items
+	// collection. Preserve its cause so the caller can change strategy.
+	if failure, ok := table.RawGetString("error").(lua.LString); ok && string(failure) != "" {
+		return nil, fmt.Errorf("program reported failure: %s", string(failure))
+	}
+	raw := table.RawGetString("items")
+	if _, ok := raw.(*lua.LTable); !ok {
+		return nil, fmt.Errorf("collection items must be an array, got %s. Return true,{items={{field=value,...},{...}}} — a Lua sequence of row tables, not a map and not a single row", raw.Type())
+	}
+	items, ok := raw.(*lua.LTable)
 	if !ok {
 		return nil, fmt.Errorf("collection items must be an array")
 	}

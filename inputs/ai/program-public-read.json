@@ -1,0 +1,1 @@
+{"program":{"target_url":"https://example.com/","code":"local body,err=http_get(TARGET_URL); if not body then return false,err end; local title=html_find(body,'h1'); return true,{items={{title=title,source_url=TARGET_URL}},meta={kind='public_read_smoke'}}"},"allowed_domains":["example.com"],"limits":{"max_requests":2,"max_bytes":65536,"max_items":5,"max_output_bytes":4096}}

@@ -6,28 +6,19 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
 	"go-lua-crawler/internal/repository"
 	taskmodel "go-lua-crawler/internal/task"
+	"go-lua-crawler/internal/testdb"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
 func TestTaskAPIIdempotency(t *testing.T) {
-	dsn := os.Getenv("MYSQL_INTEGRATION_DSN")
-	if dsn == "" {
-		t.Skip("MYSQL_INTEGRATION_DSN is not set")
-	}
-
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{TranslateError: true})
-	if err != nil {
-		t.Fatalf("open MySQL: %v", err)
-	}
+	db := testdb.Open(t)
 	if err := db.AutoMigrate(&taskmodel.CrawlTask{}, &taskmodel.TaskOutbox{}, &taskmodel.TaskEvent{}); err != nil {
 		t.Fatalf("migrate crawl tasks: %v", err)
 	}

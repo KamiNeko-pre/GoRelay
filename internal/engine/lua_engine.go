@@ -2,22 +2,19 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
-	"github.com/fsnotify/fsnotify"
 	lua "github.com/yuin/gopher-lua"
 	"go-lua-crawler/internal/config"
 	"go-lua-crawler/internal/logger"
-	"go-lua-crawler/internal/repository"
 	"go.uber.org/zap"
-	"gorm.io/gorm/clause"
 	"io"
-	"math"
 	"net/http"
 	"net/netip"
 	"net/url"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,79 +24,170 @@ import (
 // sync.Map 适合多个 worker 高频读写且键集合不固定的场景。
 var routeCache sync.Map
 
+// hostRateSchedules coordinates request start times across all Lua VMs owned
+// by this Worker process. Different hosts retain independent schedules.
+var hostRateSchedules sync.Map
+var hostHTTPGates sync.Map
+
+const maxConcurrentRequestsPerHost = 2
+
+// defaultUserAgent 使用主流浏览器标识，避免真实站点因 Go 默认 UA 直接拒绝匿名采集请求。
+const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+// applyBrowserHeaders 为沙箱出站请求补齐浏览器风格基础头，referer 可选。
+func applyBrowserHeaders(request *http.Request, referer string) {
+	if request.Header.Get("User-Agent") == "" {
+		request.Header.Set("User-Agent", defaultUserAgent)
+	}
+	request.Header.Set("Accept", "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8")
+	request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	if referer != "" {
+		request.Header.Set("Referer", referer)
+	}
+}
+
+func luaMilliseconds(value int, name string, minimum time.Duration) (time.Duration, error) {
+	maxMilliseconds := maxLuaWait.Milliseconds()
+	if int64(value) < minimum.Milliseconds() || int64(value) > maxMilliseconds {
+		return 0, fmt.Errorf("%s must be between %d and %d milliseconds", name, minimum.Milliseconds(), maxMilliseconds)
+	}
+	return time.Duration(value) * time.Millisecond, nil
+}
+
+func acquireHostHTTPGate(ctx context.Context, host string) (func(), error) {
+	value, _ := hostHTTPGates.LoadOrStore(host, make(chan struct{}, maxConcurrentRequestsPerHost))
+	gate := value.(chan struct{})
+	select {
+	case gate <- struct{}{}:
+		return func() { <-gate }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// HttpGetLimited holds a host slot until the response body has been consumed.
+// Limits are shared by Lua VMs in this process, not across containers.
+func HttpGetLimited(L *lua.LState) int {
+	rawURL := L.CheckString(1)
+	parsed, err := validateTargetURL(rawURL)
+	if err != nil {
+		L.Push(lua.LNil)
+		L.Push(lua.LString("URL validation failed: " + err.Error()))
+		return 2
+	}
+	ctx := L.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	release, err := acquireHostHTTPGate(ctx, strings.ToLower(parsed.Hostname()))
+	if err != nil {
+		L.RaiseError("host slot wait interrupted: %v", ctx.Err())
+		return 0
+	}
+	defer release()
+	if n := RateLimit(L); n != 1 {
+		return n
+	}
+	L.Pop(1)
+	return performHTTP(L, http.MethodGet, rawURL, "", "", "")
+}
+
 const maxHTTPResponseBodyBytes int64 = 4 * 1024 * 1024
+const maxLuaWait = 60 * time.Second
 
-// TaskQuene 是抓取任务的全局缓冲队列。名称沿用现有代码，实际含义是 Queue。
-var TaskQuene chan string
-
-var (
-	// ScriptCache 保存最近一次成功读取的 Lua 规则。
-	// 读取脚本和热更新会并发发生，必须用读写锁保护。
-	ScriptCache string
-	ScriptMutex sync.RWMutex
-)
-
-func InitLuaEngine(scriptPath string) {
-	// 先完成一次同步加载，确保第一个任务到来时已有可执行规则。
-	reloadScript(scriptPath)
-
-	watcher, err := fsnotify.NewWatcher()
-
-	if err != nil {
-		logger.Log.Error("创建文件监听失败", zap.Error(err))
-		return
-	}
-
-	err = watcher.Add(scriptPath)
-
-	if err != nil {
-		logger.Log.Fatal("监听脚本目录失败", zap.Error(err))
-	}
-
-	// 文件监听放在独立 goroutine 中，避免阻塞 HTTP 服务和后台 worker。
-	go func() {
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					logger.Log.Info("检测到规则脚本发生修改，触发热重载", zap.String("文件", event.Name))
-					reloadScript(scriptPath)
-				}
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				logger.Log.Error("监控保安发生异常", zap.Error(err))
-
-			}
-
-		}
-	}()
+type hostRateSchedule struct {
+	mu   sync.Mutex
+	next time.Time
 }
 
-func reloadScript(path string) {
-	// 只有完整读到新脚本后才替换缓存；读取失败时继续使用旧规则，
-	// 防止编辑器写文件的中间态导致线上规则被清空。
-	ScriptMutex.Lock()
-	defer ScriptMutex.Unlock()
-
-	data, err := os.ReadFile(path)
-
-	if err != nil {
-		logger.Log.Error("重新读取脚本失败, 维持旧规则", zap.Error(err))
-		return
+func waitForLuaContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
 	}
-	ScriptCache = string(data)
-	logger.Log.Info("规则热更新成功")
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
-func doDirectRequest(ctx context.Context, targetURL string, timeout time.Duration) (*http.Response, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+
+// SleepMS gives trusted Lua rules a bounded, cancellation-aware backoff tool.
+func SleepMS(L *lua.LState) int {
+	delay, err := luaMilliseconds(L.CheckInt(1), "sleep duration", 0)
+	if err != nil {
+		L.Push(lua.LNil)
+		L.Push(lua.LString(err.Error()))
+		return 2
+	}
+	ctx := L.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := waitForLuaContext(ctx, delay); err != nil {
+		L.RaiseError("sleep interrupted: %v", err)
+		return 0
+	}
+	L.Push(lua.LTrue)
+	return 1
+}
+
+// RateLimit reserves the next request slot for a URL host. All Lua VMs in the
+// process share that host schedule, while unrelated hosts remain independent.
+func RateLimit(L *lua.LState) int {
+	rawURL := L.CheckString(1)
+	interval, err := luaMilliseconds(L.CheckInt(2), "rate-limit interval", time.Millisecond)
+	if err != nil {
+		L.Push(lua.LNil)
+		L.Push(lua.LString(err.Error()))
+		return 2
+	}
+	parsedURL, err := validateTargetURL(rawURL)
+	if err != nil {
+		L.Push(lua.LNil)
+		L.Push(lua.LString("rate-limit URL validation failed: " + err.Error()))
+		return 2
+	}
+
+	host := strings.ToLower(parsedURL.Hostname())
+	value, _ := hostRateSchedules.LoadOrStore(host, &hostRateSchedule{})
+	schedule := value.(*hostRateSchedule)
+	now := time.Now()
+	schedule.mu.Lock()
+	reservedAt := now
+	if schedule.next.After(reservedAt) {
+		reservedAt = schedule.next
+	}
+	schedule.next = reservedAt.Add(interval)
+	schedule.mu.Unlock()
+
+	ctx := L.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := waitForLuaContext(ctx, time.Until(reservedAt)); err != nil {
+		L.RaiseError("rate-limit wait interrupted: %v", err)
+		return 0
+	}
+	L.Push(lua.LTrue)
+	return 1
+}
+
+func doDirectRequest(ctx context.Context, method, targetURL, body, contentType, referer string, timeout time.Duration) (*http.Response, error) {
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, targetURL, reader)
 	if err != nil {
 		return nil, fmt.Errorf("create direct request: %w", err)
 	}
+	if contentType != "" {
+		request.Header.Set("Content-Type", contentType)
+	}
+	applyBrowserHeaders(request, referer)
 	client := &http.Client{
 		Timeout:       timeout,
 		CheckRedirect: validateRedirect,
@@ -155,11 +243,10 @@ func readResponseBody(body io.Reader, contentLength int64) ([]byte, error) {
 	return data, nil
 }
 
-func HttpGet(L *lua.LState) int {
-	// 这是暴露给 Lua 的 Go 函数。返回值是压入 Lua 栈的数量：
-	// 成功时返回 body；失败时返回 nil 和错误信息，供 Lua 脚本自行处理。
-	targetUrl := L.CheckString(1)
-
+// performHTTP is the shared request path for the Lua sandbox. It mirrors the
+// previous GET-only flow but accepts an HTTP method and an optional form body,
+// so rules can call POST endpoints (for example job-search APIs).
+func performHTTP(L *lua.LState, method, targetUrl, body, contentType, referer string) int {
 	ctx := L.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -188,21 +275,20 @@ func HttpGet(L *lua.LState) int {
 	var reqErr error
 	proxyTimeout := time.Duration(cfg.Engine.HTTPTimeoutProxy) * time.Second
 	if useProxy && proxyStr != "" {
-		resp, reqErr = doProxyRequest(ctx, targetUrl, proxyStr, proxyTimeout)
+		resp, reqErr = doProxyRequest(ctx, method, targetUrl, body, contentType, referer, proxyStr, proxyTimeout)
 	} else {
-		resp, reqErr = doDirectRequest(ctx, targetUrl, time.Duration(cfg.Engine.HTTPTimeoutDirect)*time.Second)
+		resp, reqErr = doDirectRequest(ctx, method, targetUrl, body, contentType, referer, time.Duration(cfg.Engine.HTTPTimeoutDirect)*time.Second)
 		// 首次访问优先直连；直连失败且配置了代理时才降级到代理，
 		// 成功后的选择会写入缓存，供同一 host 后续请求使用。
 		if reqErr != nil && proxyStr != "" {
 			logger.Log.Warn("直连失败, 启动代理并记录至路由表", zap.String("host", host))
-			resp, reqErr = doProxyRequest(ctx, targetUrl, proxyStr, proxyTimeout)
+			resp, reqErr = doProxyRequest(ctx, method, targetUrl, body, contentType, referer, proxyStr, proxyTimeout)
 			if reqErr == nil {
 				routeCache.Store(host, true)
 			}
 		} else if reqErr == nil {
 			routeCache.Store(host, false)
 		}
-
 	}
 	if reqErr != nil {
 		L.Push(lua.LNil)
@@ -216,17 +302,48 @@ func HttpGet(L *lua.LState) int {
 		return 2
 	}
 
-	body, err := readResponseBody(resp.Body, resp.ContentLength)
+	respBody, err := readResponseBody(resp.Body, resp.ContentLength)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))
 		return 2
 	}
-	L.Push(lua.LString(string(body)))
+	L.Push(lua.LString(string(respBody)))
 	return 1
 }
 
-func doProxyRequest(ctx context.Context, targetURL string, proxyStr string, timeout time.Duration) (*http.Response, error) {
+// HttpGet exposes a GET request to Lua. 成功返回 body，失败返回 nil 和错误信息。
+func HttpGet(L *lua.LState) int {
+	return performHTTP(L, http.MethodGet, L.CheckString(1), "", "", "")
+}
+
+// HttpPost exposes a form-encoded POST request to Lua.
+// Usage: local body, err = http_post(url, "k=v&k2=v2")
+func HttpPost(L *lua.LState) int {
+	return performHTTP(L, http.MethodPost, L.CheckString(1), L.CheckString(2), "application/x-www-form-urlencoded", "")
+}
+
+// HttpPostJSON exposes a JSON-body POST request to Lua, with an optional referer.
+// Usage: local body, err = http_post_json(url, '{"k":1}'[, 'https://example.com/'])
+func HttpPostJSON(L *lua.LState) int {
+	referer := ""
+	if L.GetTop() >= 3 {
+		referer = L.CheckString(3)
+	}
+	return performHTTP(L, http.MethodPost, L.CheckString(1), L.CheckString(2), "application/json", referer)
+}
+
+// HttpGetReferer issues a GET with a Referer header (some sites require a
+// same-site referer for detail pages). Usage: local body, err = http_get_referer(url, ref)
+func HttpGetReferer(L *lua.LState) int {
+	referer := ""
+	if L.GetTop() >= 2 {
+		referer = L.CheckString(2)
+	}
+	return performHTTP(L, http.MethodGet, L.CheckString(1), "", "", referer)
+}
+
+func doProxyRequest(ctx context.Context, method, targetURL, body, contentType, referer, proxyStr string, timeout time.Duration) (*http.Response, error) {
 	// 为代理请求单独设置超时，避免代理线路的波动占用直连请求的时间预算。
 	proxyURL, err := url.Parse(proxyStr)
 	if err != nil {
@@ -242,68 +359,24 @@ func doProxyRequest(ctx context.Context, targetURL string, proxyStr string, time
 			Proxy: http.ProxyURL(proxyURL),
 		},
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, targetURL, reader)
 	if err != nil {
 		return nil, fmt.Errorf("create proxy request: %w", err)
 	}
+	if contentType != "" {
+		request.Header.Set("Content-Type", contentType)
+	}
+	applyBrowserHeaders(request, referer)
 	return proxyClient.Do(request)
 
 }
 
-func RunLuaScript(scriptPath string, targetUrl string) error {
-	// 每次任务创建独立 Lua 虚拟机，避免脚本全局变量在不同任务之间相互污染。
-	// 规则文本从内存缓存读取，不在 worker 热路径中反复访问磁盘。
-	ScriptMutex.RLock()
-	scriptText := ScriptCache
-	ScriptMutex.RUnlock()
-	if scriptText == "" {
-		return fmt.Errorf("内存中无有效规则")
-	}
-	timeout := time.Duration(config.Get().Engine.LuaTimeout) * time.Second
-	result, err := executeLuaScript(scriptText, targetUrl, timeout)
-	if err != nil {
-		return err
-	}
-
-	repoName := strings.Replace(result.URL, "https://github.com/", "", 1)
-	repoRecord := repository.GithubRepo{
-		Name:        repoName,
-		Stars:       result.Stars,
-		Description: result.Description,
-		Source:      "github",
-	}
-	// 以仓库名查询后更新或创建，保证同一仓库重复抓取时覆盖最新数据而不是累积重复记录。
-	dbResult := repository.DB.Where(repository.GithubRepo{Name: repoName}).Assign(repoRecord).FirstOrCreate(&repoRecord)
-	if dbResult.Error != nil {
-		return fmt.Errorf("数据入库失败: %v", dbResult.Error)
-	}
-	if len(result.FissionURLs) > 0 {
-		var newRepos []repository.GithubRepo
-		for _, furl := range result.FissionURLs {
-			fName := strings.Replace(furl, "https://github.com/", "", 1)
-			newRepos = append(newRepos, repository.GithubRepo{Name: fName})
-		}
-
-		// 批量插入新发现的链接，并由数据库唯一索引过滤重复仓库。
-		// OnConflict DoNothing 保证已存在的任务不会因为重复发现而报错。
-		dbErr := repository.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&newRepos).Error
-
-		if dbErr != nil {
-			logger.Log.Warn("裂变链接入库遭遇部分异常", zap.Error(dbErr))
-		} else {
-			logger.Log.Info("📡 裂变雷达生效", zap.Int("发现并抛入蓄水池的新链接数", len(newRepos)))
-		}
-	}
-	logger.Log.Info("数据已保存至数据库!", zap.String("仓库", repoName), zap.Int("Stars", result.Stars))
-	return nil
-}
-
 type luaScriptResult struct {
-	URL         string
-	Stars       int
-	Description string
-	FissionURLs []string
-	Collection  map[string]any `json:"-"`
+	Collection map[string]any `json:"-"`
 }
 
 func openLuaSandboxLibraries(L *lua.LState) error {
@@ -367,6 +440,12 @@ func executeLuaScriptContext(parent context.Context, scriptText, targetURL strin
 	}
 
 	L.SetGlobal("http_get", L.NewFunction(HttpGet))
+	L.SetGlobal("http_get_limited", L.NewFunction(HttpGetLimited))
+	L.SetGlobal("http_get_referer", L.NewFunction(HttpGetReferer))
+	L.SetGlobal("http_post", L.NewFunction(HttpPost))
+	L.SetGlobal("http_post_json", L.NewFunction(HttpPostJSON))
+	L.SetGlobal("rate_limit", L.NewFunction(RateLimit))
+	L.SetGlobal("sleep_ms", L.NewFunction(SleepMS))
 	// A Lua VM owns exactly one task. Keep only that task's most recently parsed
 	// document so rules can make several selector queries without reparsing the
 	// same response or retaining DOM trees across tasks.
@@ -375,6 +454,7 @@ func executeLuaScriptContext(parent context.Context, scriptText, targetURL strin
 	L.SetGlobal("html_find_all", L.NewFunction(dom.htmlFindAll))
 	L.SetGlobal("html_attr_all", L.NewFunction(dom.htmlAttrAll))
 	L.SetGlobal("url_resolve", L.NewFunction(URLResolve))
+	L.SetGlobal("json_decode", L.NewFunction(JSONDecode))
 	L.SetGlobal("TARGET_URL", lua.LString(targetURL))
 
 	ctx, cancel := context.WithTimeout(parent, timeout)
@@ -406,57 +486,65 @@ func decodeLuaResult(L *lua.LState) (luaScriptResult, error) {
 	if !ok {
 		return luaScriptResult{}, fmt.Errorf("Lua script success data must be a table")
 	}
-	if luaData.RawGetString("items") != lua.LNil {
-		payload, err := decodeCollection(luaData)
-		return luaScriptResult{Collection: payload}, err
-	}
-
-	stars, err := parseStarCount(luaData.RawGetString("stars").String())
-	if err != nil {
-		return luaScriptResult{}, fmt.Errorf("parse repository stars: %w", err)
-	}
-	result := luaScriptResult{
-		URL:         luaData.RawGetString("url").String(),
-		Stars:       stars,
-		Description: luaData.RawGetString("description").String(),
-	}
-	fissionValue := luaData.RawGetString("fission_urls")
-	if fissionTable, ok := fissionValue.(*lua.LTable); ok {
-		fissionTable.ForEach(func(_ lua.LValue, value lua.LValue) {
-			if value.Type() == lua.LTString {
-				result.FissionURLs = append(result.FissionURLs, value.String())
-			}
-		})
-	}
-	return result, nil
-}
-
-func parseStarCount(raw string) (int, error) {
-	starsText := strings.ToLower(strings.TrimSpace(raw))
-	starsText = strings.ReplaceAll(starsText, ",", "")
-	multiplier := 1.0
-	if strings.HasSuffix(starsText, "k") {
-		starsText = strings.TrimSuffix(starsText, "k")
-		multiplier = 1000
-	}
-
-	stars, err := strconv.ParseFloat(starsText, 64)
-	if err != nil {
-		return 0, err
-	}
-	return int(math.Round(stars * multiplier)), nil
+	payload, err := decodeCollection(luaData)
+	return luaScriptResult{Collection: payload}, err
 }
 
 // domCache is deliberately task-local and holds only the latest HTML value.
 // It is not a process-wide cache: documents disappear with the Lua VM after
 // the task completes, so different targets cannot leak state into one another.
+type DOMDiagnostic struct {
+	Code         string `json:"code"`
+	API          string `json:"api"`
+	Selector     string `json:"selector"`
+	Attribute    string `json:"attribute,omitempty"`
+	InputKind    string `json:"input_kind"`
+	SourceDigest string `json:"source_digest"`
+	Instruction  string `json:"instruction"`
+}
+type domInput struct{ kind, source string }
 type domCache struct {
-	html string
-	doc  *goquery.Document
+	html            string
+	doc             *goquery.Document
+	inputs          map[string]domInput
+	diagnostics     []DOMDiagnostic
+	seenDiagnostics map[string]bool
 }
 
 func newDOMCache() *domCache {
-	return &domCache{}
+	return &domCache{inputs: map[string]domInput{}, seenDiagnostics: map[string]bool{}}
+}
+
+// Only successful HTTP bodies and values actually selected from them carry
+// source ownership. Lua report strings and invented markup cannot mint it.
+func (cache *domCache) observeSource(body string) {
+	sum := sha256.Sum256([]byte(body))
+	cache.inputs[body] = domInput{kind: "source_html", source: hex.EncodeToString(sum[:])}
+}
+func (cache *domCache) observeText(input, text string) {
+	if owner, ok := cache.inputs[input]; ok && text != "" {
+		cache.inputs[text] = domInput{kind: "selected_text", source: owner.source}
+	}
+}
+func (cache *domCache) diagnostic(input, api, selector, attribute, code string) {
+	owner, ok := cache.inputs[input]
+	if !ok {
+		return
+	}
+	hint := "The selector matched no node in the actual source. Inspect its observed selector inventory before changing the extractor."
+	if owner.kind == "selected_text" {
+		hint = "html_find and html_find_all return text, not HTML fragments. Query the original fetched HTML with the observed selector; do not parse returned row text as markup. Use document-level field selectors and observed row identities, retaining exact field locators."
+	}
+	if code == "DOM_ATTRIBUTE_MISSING" {
+		hint = "A matched source node lacks the requested attribute. Inspect its actual attributes or child link before choosing the attribute locator."
+	}
+	d := DOMDiagnostic{Code: code, API: api, Selector: selector, Attribute: attribute, InputKind: owner.kind, SourceDigest: owner.source, Instruction: hint}
+	raw, _ := json.Marshal(d)
+	key := string(raw)
+	if !cache.seenDiagnostics[key] {
+		cache.seenDiagnostics[key] = true
+		cache.diagnostics = append(cache.diagnostics, d)
+	}
 }
 
 func (cache *domCache) document(html string) (*goquery.Document, error) {
@@ -489,11 +577,13 @@ func (cache *domCache) htmlFind(L *lua.LState) int {
 	selection := doc.Find(selector).First()
 
 	if selection.Length() == 0 {
+		cache.diagnostic(htmlstr, "html_find", selector, "", "DOM_NO_MATCH")
 		L.Push(lua.LNil)
 		L.Push(lua.LString("在网页中未找到匹配的元素: " + selector))
 		return 2
 	}
 	cleanText := strings.TrimSpace(selection.Text())
+	cache.observeText(htmlstr, cleanText)
 	L.Push(lua.LString(cleanText))
 	return 1
 
@@ -525,12 +615,25 @@ func (cache *domCache) htmlSelectAll(L *lua.LState, attribute string) int {
 		return 2
 	}
 	values := L.NewTable()
-	doc.Find(selector).Each(func(_ int, selection *goquery.Selection) {
+	selectionSet := doc.Find(selector)
+	api := "html_find_all"
+	if attribute != "" {
+		api = "html_attr_all"
+	}
+	if selectionSet.Length() == 0 {
+		cache.diagnostic(htmlText, api, selector, attribute, "DOM_NO_MATCH")
+	}
+	selectionSet.Each(func(_ int, selection *goquery.Selection) {
 		value := strings.TrimSpace(selection.Text())
 		if attribute != "" {
-			value, _ = selection.Attr(attribute)
+			var present bool
+			value, present = selection.Attr(attribute)
+			if !present {
+				cache.diagnostic(htmlText, api, selector, attribute, "DOM_ATTRIBUTE_MISSING")
+			}
 			value = strings.TrimSpace(value)
 		}
+		cache.observeText(htmlText, value)
 		values.Append(lua.LString(value))
 	})
 	L.Push(values)

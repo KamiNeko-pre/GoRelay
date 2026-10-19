@@ -1,0 +1,13 @@
+{
+  "program": {
+    "target_url": "https://fixture.invalid/catalog",
+    "code": "local items = {}; for page=1,2 do local list_url=TARGET_URL..'?page='..page; local raw,err=http_get(list_url); if not raw then return false,err end; local data=json_decode(raw); for _,name in ipairs(data.names) do local detail_url=url_resolve(TARGET_URL,'/detail/'..name); local body,fetch_err=http_get(detail_url); if not body then return false,fetch_err end; local row=json_decode(body); row.source_url=detail_url; table.insert(items,row) end end; return true,{items=items,meta={pages=2,mode='offline_fixture'}}"
+  },
+  "responses": [
+    {"method":"GET","url":"https://fixture.invalid/catalog?page=1","status":200,"body":"{\"names\":[\"A\",\"B\"]}","fetched_at":"2026-10-05T00:00:00Z"},
+    {"method":"GET","url":"https://fixture.invalid/detail/A","status":200,"body":"{\"name\":\"A\",\"version\":\"1.0\",\"downloads\":20,\"active\":true}","fetched_at":"2026-10-05T00:00:00Z"},
+    {"method":"GET","url":"https://fixture.invalid/detail/B","status":200,"body":"{\"name\":\"B\",\"version\":\"2.0\",\"downloads\":30,\"active\":false}","fetched_at":"2026-10-05T00:00:00Z"},
+    {"method":"GET","url":"https://fixture.invalid/catalog?page=2","status":200,"body":"{\"names\":[\"C\"]}","fetched_at":"2026-10-05T00:00:00Z"},
+    {"method":"GET","url":"https://fixture.invalid/detail/C","status":200,"body":"{\"name\":\"C\",\"version\":\"3.0\",\"downloads\":40,\"active\":true}","fetched_at":"2026-10-05T00:00:00Z"}
+  ]
+}

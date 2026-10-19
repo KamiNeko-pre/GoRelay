@@ -68,9 +68,9 @@ func TestCollectionRejectsInvalidJSONStructures(t *testing.T) {
 	}
 }
 
-func TestLegacyResultRemainsCompatible(t *testing.T) {
-	result, err := executeLuaScript(`return true,{url=TARGET_URL,stars="1.2k",description="old rule"}`, "https://example.com", time.Second)
-	if err != nil || result.Stars != 1200 || result.Description != "old rule" {
-		t.Fatalf("legacy=%+v err=%v", result, err)
+func TestCollectionRejectsLegacyGitHubSpecificContract(t *testing.T) {
+	_, err := executeLuaScript(`return true,{url=TARGET_URL,stars="1.2k",description="old rule"}`, "https://example.com", time.Second)
+	if err == nil || !strings.Contains(err.Error(), "collection items must be an array") {
+		t.Fatalf("error = %v, want collection contract error", err)
 	}
 }

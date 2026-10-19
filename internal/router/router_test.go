@@ -1,40 +1,44 @@
 package router
 
 import (
-	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"go-lua-crawler/internal/engine"
-	"go-lua-crawler/internal/logger"
-	"go.uber.org/zap"
 )
 
-func TestTaskRouteRejectsInvalidRequest(t *testing.T) {
+func TestLegacySingularTaskRouteIsNotRegistered(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	oldLogger := logger.Log
-	oldTaskQueue := engine.TaskQuene
-	logger.Log = zap.NewNop()
-	engine.TaskQuene = make(chan string, 1)
-	t.Cleanup(func() {
-		logger.Log = oldLogger
-		engine.TaskQuene = oldTaskQueue
-	})
-
 	router := SetupRouter()
-	request := httptest.NewRequest(
-		http.MethodPost,
-		"/api/v1/task",
-		bytes.NewBufferString(`{"target":"github","url":"invalid-url"}`),
-	)
-	request.Header.Set("Content-Type", "application/json")
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/task", nil)
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, request)
 
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
+func TestUnavailableInformationFrontendKeepsCrawlerRoutesAvailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("GORELAY_ADMIN_TOKEN", "local-test-token")
+	r := SetupRouterWithInformation(nil, nil)
+	for _, tc := range []struct {
+		path   string
+		status int
+	}{
+		{"/healthz", 200},
+		{"/api/v1/agent/status", 200},
+		{"/api/v1/information/requests/unavailable", 503},
+	} {
+		req := httptest.NewRequest("GET", tc.path, nil)
+		req.Header.Set("Authorization", "Bearer local-test-token")
+		out := httptest.NewRecorder()
+		r.ServeHTTP(out, req)
+		if out.Code != tc.status {
+			t.Fatalf("%s returned %d want %d", tc.path, out.Code, tc.status)
+		}
 	}
 }

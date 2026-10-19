@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"go-lua-crawler/internal/aiapp"
 	"go-lua-crawler/internal/config"
-	"go-lua-crawler/internal/engine"
 	"go-lua-crawler/internal/logger"
 	"go-lua-crawler/internal/queue"
 	"go-lua-crawler/internal/repository"
@@ -45,8 +45,12 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer sqlDB.Close()
+	ai := aiapp.NewService(repository.DB)
+	if err := ai.Migrate(); err != nil {
+		return err
+	}
+	ai.Configure()
 	startPprofServer(config.Get().App.PprofPort)
-	engine.InitLuaEngine(config.Get().App.LuaPath)
 	if err := queue.InitClient(ctx); err != nil {
 		return fmt.Errorf("initialize Redis: %w", err)
 	}
@@ -75,7 +79,7 @@ func run(ctx context.Context) error {
 		workerConfig.ExecutionTimeout = time.Duration(cfg.Engine.LuaTimeout) * time.Second
 		workerConfig.ClaimMinIdle = time.Duration(cfg.Redis.ClaimMinIdleMS) * time.Millisecond
 		workerConfig.ClaimInterval = time.Duration(cfg.Redis.ClaimIntervalMS) * time.Millisecond
-		processor, err := worker.NewProcessor(queue.Client, workerConfig)
+		processor, err := worker.NewProcessor(queue.Client, workerConfig, ai.ExecuteTask)
 		if err != nil {
 			return fmt.Errorf("create processor: %w", err)
 		}

@@ -16,15 +16,12 @@ type Config struct {
 	MySQL     MySQLConfig     `mapstructure:"mysql"`
 	Redis     RedisConfig     `mapstructure:"redis"`
 	Publisher PublisherConfig `mapstructure:"publisher"`
-	Cron      CronConfig      `mapstructure:"cron"`
 	Engine    EngineConfig    `mapstructure:"engine"`
-	Crawler   CrawlerConfig   `mapstructure:"crawler"`
 }
 
 type AppConfig struct {
-	// AppConfig 保存服务自身的监听端口、规则脚本和可选代理配置。
+	// AppConfig 保存服务自身的监听端口、可选代理和 pprof 配置。
 	Port      int    `mapstructure:"port"`
-	LuaPath   string `mapstructure:"lua_path"`
 	Proxy     string `mapstructure:"proxy"`
 	PprofPort int    `mapstructure:"pprof_port"`
 }
@@ -52,26 +49,12 @@ type PublisherConfig struct {
 	BatchTimeoutSeconds int `mapstructure:"batch_timeout_seconds"`
 }
 
-type CronConfig struct {
-	// Spec 是 robfig/cron 使用的定时表达式。
-	Spec string `mapstructure:"spec"`
-}
-
 type EngineConfig struct {
-	// EngineConfig 决定任务队列、worker 数量以及网络和 Lua 执行的超时阈值。
+	// EngineConfig 决定 Worker 数量以及网络和 Lua 执行的超时阈值。
 	WorkerCount       int `mapstructure:"worker_count"`
-	TaskQueueSize     int `mapstructure:"task_queue_size"`
 	LuaTimeout        int `mapstructure:"lua_timeout"`
 	HTTPTimeoutDirect int `mapstructure:"http_timeout_direct"`
 	HTTPTimeoutProxy  int `mapstructure:"http_timeout_proxy"`
-}
-
-type CrawlerConfig struct {
-	// CrawlerConfig 为爬取频率和链接裂变规模预留配置项。
-	RequestDelayMin int `mapstructure:"request_delay_min"`
-	RequestDelayMax int `mapstructure:"request_delay_max"`
-	MaxFissionDepth int `mapstructure:"max_fission_depth"`
-	MaxFissionURLs  int `mapstructure:"max_fission_urls"`
 }
 
 var (
@@ -130,16 +113,13 @@ func InitConfig() {
 // replaceable without putting credentials in the checked-in YAML file.
 func bindEnvironment() {
 	keys := []string{
-		"app.port", "app.lua_path", "app.proxy", "app.pprof_port",
+		"app.port", "app.proxy", "app.pprof_port",
 		"mysql.dsn", "mysql.max_idle_conns", "mysql.max_open_conns",
 		"redis.addr", "redis.password", "redis.db", "redis.stream", "redis.consumer_group",
 		"redis.claim_min_idle_ms", "redis.claim_interval_ms",
 		"publisher.batch_size", "publisher.poll_interval_ms", "publisher.batch_timeout_seconds",
-		"cron.spec",
-		"engine.worker_count", "engine.task_queue_size", "engine.lua_timeout",
+		"engine.worker_count", "engine.lua_timeout",
 		"engine.http_timeout_direct", "engine.http_timeout_proxy",
-		"crawler.request_delay_min", "crawler.request_delay_max",
-		"crawler.max_fission_depth", "crawler.max_fission_urls",
 	}
 	for _, key := range keys {
 		if err := viper.BindEnv(key); err != nil {

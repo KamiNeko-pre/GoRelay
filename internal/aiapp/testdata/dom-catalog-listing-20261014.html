@@ -1,0 +1,821 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<!--<![endif]-->
+
+<head>
+
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta name="description" content="西南交通大学采购信息网">
+    <meta name="author" content="采购与招标管理办公室">
+
+    <meta name="viewport" content="width=device-width, initial-scale=0.4">
+    <title>采购公告-采购与招标管理办公室</title><meta name="pageType" content="2">
+<meta name="pageTitle" content="采购公告">
+<META Name="keywords" Content="采购与招标管理办公室,采购公告" />
+
+
+    <link rel="shortcut icon" href="img/favicon2.ico" />
+
+    <!-- STYLES -->
+    <link rel="stylesheet" type="text/css" href="css/ui.css" />
+    <link rel="stylesheet" type="text/css" href="css/base.css" />
+    <link rel="stylesheet" type="text/css" href="css/stylex20260415.css" />
+    <link rel="stylesheet" type="text/css" href="css/960x20260415.css" />
+
+    <link rel="stylesheet" type="text/css" href="css/font.css" />
+    <!--[if lt IE 9]> <script type="text/javascript" src="js/customM.js"></script> <![endif]-->
+
+<!--Announced by Visual SiteBuilder 9-->
+<script language="javascript" src="_sitegray/_sitegray.js"></script>
+<!-- CustomerNO:77656262657232307476475d51535742000300034452 -->
+<link rel="stylesheet" type="text/css" href="newslist.vsb.css" />
+<script type="text/javascript" src="/system/resource/js/counter.js"></script>
+<script type="text/javascript">_jsq_(1004,'/newslist.jsp',-1,1463493268)</script>
+</head>
+
+<body>
+
+    <!-- Body Wrapper -->
+    <div class="body-wrapper">
+        <div class="controller">
+            <div class="controller2">
+
+                <!-- Header -->
+                <header id="header">
+                    <div class="container">
+                        <div class="column">
+
+
+                            <div class="logo">
+                                <a href="https://www.swjtu.edu.cn">
+                                    <img src="img/bg-logo.png" alt="www.swjtu.edu.cn" width="450px" /></a>
+                            </div>
+
+                            <div class="search">
+                             <!-- 3.1.3版本 -->
+
+
+
+<script language="javascript" src="/system/resource/js/base64.js"></script><script language="javascript" src="/system/resource/js/jquery/jquery-latest.min.js"></script><script language="javascript" src="/system/resource/vue/vue.js"></script><script language="javascript" src="/system/resource/vue/bluebird.min.js"></script><script language="javascript" src="/system/resource/vue/axios.js"></script><script language="javascript" src="/system/resource/vue/polyfill.js"></script><script language="javascript" src="/system/resource/vue/token.js"></script><LINK href="/system/resource/vue/static/element/index.css" type="text/css" rel="stylesheet"><script language="javascript" src="/system/resource/vue/static/element/index.js"></script><script language="javascript" src="/system/resource/vue/static/public.js"></script><script language="javascript" src="/system/resource/openapp/search/js/containsHtmlTags.js"></script><script language="javascript" src="/system/resource/openapp/search/layui/layui.js"></script><style>
+    #appu0 .qwss{
+        height: 31px;
+        font-size: 12px;
+        min-width: 190px;
+        max-width: 600px;
+        width: 60%;
+        margin-top: -15px;
+        outline: none;
+        padding-left: 10px;
+        border-radius: 2px;
+        border: 1px solid #e4e7ed;}
+    #appu0 .tj{
+        padding-left: 6px;
+        letter-spacing: 5px;
+        color: white;
+        min-width: 53px;
+        max-width: 150px;
+        height: 32px;
+        border: 0;
+        border-radius: 2px;
+        background-color: #1890FF;
+        position: relative;
+        top: 1px;
+        width: 20%;
+        margin-top: -15px;}
+</style>
+<div id="divu0"></div>
+<script type="text/html" id="htmlu0">
+    <div id="appu0">
+        <div v-if="!isError">
+        
+         
+        
+
+
+                                 <form id="searchFromx" action="" class="parent">
+<input id="searchInput" autocomplete=off v-model=query.keyWord @keyup.enter="onSubmit" class="search2" placeholder="搜索" >
+<input type="button" name="searchbutton" id="searchbuttonx" class="btn" v-on:click="onSubmit()">
+</form>
+                            
+
+
+        </div>
+        <div v-if="isError" style="color: #b30216; font-size:18px;text-align: center;padding:20px;">
+            应用维护中！
+        </div>
+    </div>
+</script>
+
+
+
+<script>
+
+
+
+
+
+    $("#divu0").html($("#htmlu0").text());
+</script>
+<script>
+    var appOwner = "1463493268";
+    var token = gettoken(10);
+    var urlPrefix = "/aop_component/";
+
+    jQuery.support.cors = true;
+    $.ajaxSetup({
+        beforeSend: function (request, settings) {
+            request.setRequestHeader("Authorization", token);
+            request.setRequestHeader("owner", appOwner);
+        }
+    });
+
+    new Vue({
+        el: "#appu0",
+        data: function () {
+            return {
+                query: {
+                    keyWord: "",//搜索关键词
+                    owner: appOwner,
+                    token: token,
+                    urlPrefix: urlPrefix,
+                    lang:"i18n_zh_CN"
+                },
+                isError: false
+            }
+        },
+        mounted: function () {
+            var _this = this;
+            // _this.init();
+        },
+        methods: {
+            init: function(){
+                $.ajax({
+                    url: "/aop_component//webber/search/test",
+                    type: "get",
+                    success: function (response) {
+                        if (response.code == "0000") {
+                        } else if (response.code == "220") {
+                            _this.isError = true;
+                            console.log(response);
+                        } else if (!response.code) {
+                            _this.isError = true;
+                            console.log(response);
+                        }
+                    },
+                    error: function (response) {
+                        _this.isError = true;
+                    }
+                });
+            },
+            onSubmit: function (e) {
+                var url = "/aop_views/search/modules/resultpc/soso.html";
+                if ("10" == "1" || "10" == "2") {
+                    url = "" + url;
+                }
+                var _this = this;
+                var query = _this.query;
+                if (url.indexOf("?") > -1) {
+                    url = url.split("?")[0];
+                }
+                if (query.keyWord) {
+                    var query = new Base64().encode(JSON.stringify(query));
+                    
+                    window.open(url + "?query=" + query);
+                } else {
+                    alert("请填写搜索内容!")
+                }
+            },
+        }
+    })
+    
+    const formx = document.getElementById('searchbuttonx');
+    const searchInput = document.getElementById('searchInput');
+searchInput.addEventListener('keydown', function(event) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    
+     var url = "/aop_views/search/modules/resultpc/soso.html";
+                if ("10" == "1" || "10" == "2") {
+                    url = "" + url;
+                }
+                var _this = this;
+                var query = _this.query;
+                if (url.indexOf("?") > -1) {
+                    url = url.split("?")[0];
+                }
+                if (query.keyWord) {
+                    var query = new Base64().encode(JSON.stringify(query));
+                    
+                    window.open(url + "?query=" + query);
+                } else {
+                    alert("请填写搜索内容!")
+                }
+  }
+});
+</script>
+
+
+
+<script>
+   var appElementu0 = document.querySelector("#appu0");
+   if (appElementu0 && appElementu0.__vue__) {
+
+   } else {
+      $("#divu0").html($("#htmlu0").text());
+      var appOwner = "1463493268";   
+      var urlPrefix = "/aop_component/";
+      var ifLogin="";
+      var token = ifLogin=='true'?gettoken(10, true).trim():'tourist';
+      if (containsHtmlTags(token) || !token) { 
+         token = 'tourist';
+      }
+      jQuery.support.cors = true;
+      $.ajaxSetup({
+        beforeSend: function (request, settings) {
+            request.setRequestHeader("Authorization", token);
+            request.setRequestHeader("owner", appOwner);
+        }
+      });
+      var queryInfou0 = {
+        query: {
+            keyWord: "",//搜索关键词
+            owner: appOwner,
+            token: token,
+            urlPrefix: urlPrefix,
+            lang:"i18n_zh_CN"
+        },
+        isError: false
+      };
+      function keyUpFunu0(e){
+        var theEvent = e || window.event;
+        var keyCode = theEvent.keyCode || theEvent.which || theEvent.charCode;
+        if(keyCode == 13){
+          onSubmitu0();
+        }
+      };
+
+      function onSubmitu0(e) {
+        queryInfou0.query.keyWord= $("#appu0  .qwss").val();
+        
+        var url = "/aop_views/search/modules/resultpc/soso.html";      
+        if ("10" == "1" || "10" == "2") {
+           url = "" + url;
+        }
+        var query = queryInfou0.query;
+        if (url.indexOf("?") > -1) {
+            url = url.split("?")[0];
+        }
+        if (query.keyWord) {
+            var query = new Base64().encode(JSON.stringify(query));
+            window.open(url + "?query=" + query);
+        } else {
+            alert("请填写搜索内容")
+        }
+      };
+   }
+</script>
+                            </div>
+
+<script src="js/jquery.js" type="text/javascript"></script>
+    <script src="js/custom-menu.js" type="text/javascript"></script>
+    <script src="js/foucs2x.js" type="text/javascript"></script>
+
+
+                            <!-- Nav -->
+                            <nav id="nav">
+                                <div class="nav">
+                                    <!-- 列表 -->
+                                    <ul>
+                                        <li class="nav-litem">
+                                            <a href="https://bidding.swjtu.edu.cn/">首页</a>
+                                        </li>
+                                        <!-- 一级菜单 -->
+                                        <li class="nav-litem">
+                                            <a href="#">部门概况</a>
+                                            <ul>
+                                                <!-- 二级菜单 -->
+                                                <li><a href="https://bidding.swjtu.edu.cn/bmgk/gzzz.htm">工作职责</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/bmgk/zzjg.htm">组织机构</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/bmgk/lxwm.htm">联系我们</a></li>
+                                            </ul>
+                                        </li>
+                                        <li class="nav-litem">
+                                            <a href="https://bidding.swjtu.edu.cn/gzdt.htm">工作动态</a>
+                                        </li>
+                                        <li class="nav-litem">
+                                            <a href="https://bidding.swjtu.edu.cn/cggg.htm">采购公告</a>
+                                            <!-- 二级菜单 -->
+                                            <ul>
+                                                <li><a href="https://bidding.swjtu.edu.cn/cggg/gcjs.htm">工程建设</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/cggg/yqsb.htm">仪器设备</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/cggg/wzfw.htm">物资服务</a></li>
+                                            </ul>
+                                        </li>
+
+                                        <li class="nav-litem">
+                                            <a href="https://bidding.swjtu.edu.cn/jggg.htm">结果公告</a>
+                                            <!-- 二级菜单 -->
+                                            <ul>
+                                                <li><a href="https://bidding.swjtu.edu.cn/jggg/gcjs.htm">工程建设</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/jggg/yqsb.htm">仪器设备</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/jggg/wzfw.htm">物资服务</a></li>
+                                            </ul>
+                                        </li>
+                                        <li class="nav-litem">
+                                            <a href="https://bidding.swjtu.edu.cn/qtgg.htm">其他公告</a>
+                                        </li>
+                                        <li class="nav-litem">
+                                            <a href="https://bidding.swjtu.edu.cn/jcdj.htm">基层党建</a>
+                                        </li>
+                                        <li class="nav-litem">
+                                            <a href="https://jbbidding.swjtu.edu.cn/">网上竞价</a>
+                                        </li>
+                                        <li class="nav-litem">
+                                            <a href="https://bidding.swjtu.edu.cn/zcfg.htm">政策法规</a>
+                                            <!-- 二级菜单 -->
+                                            <ul>
+                                                <li><a href="https://bidding.swjtu.edu.cn/zcfg/gjflfg.htm">国家法律法规</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/zcfg/bwzcfg.htm">部委政策法规</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/zcfg/xxgzzd.htm">学校规章制度</a></li>
+                                            </ul>
+                                        </li>
+
+                                        <li class="nav-litem">
+                                            <a href="https://bidding.swjtu.edu.cn/fwzn.htm">服务指南</a>
+                                            <!-- 二级菜单 -->
+                                            <ul>
+                                                <li><a href="https://bidding.swjtu.edu.cn/fwzn/cgwd.htm">采购问答</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/fwzn/cglc.htm">采购流程</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/fwzn/czsm.htm">操作说明</a></li>
+                                            </ul>
+                                        </li>
+                                        <li class="nav-litem">
+                                            <a href="https://bidding.swjtu.edu.cn/xzfw.htm">下载服务</a>
+                                            <!-- 二级菜单 -->
+                                            <ul>
+                                                <li><a href="https://bidding.swjtu.edu.cn/xzfw/cgsqxg.htm">采购申请相关</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/xzfw/zfcggl.htm">政府采购管理</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/xzfw/cghtgl.htm">采购合同管理</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/xzfw/cghtfb.htm">采购合同范本</a></li>
+                                                <li><a href="https://bidding.swjtu.edu.cn/xzfw/qtzlxz.htm">其他资料下载</a></li>
+                                            </ul>
+                                        </li>
+                                        <li class="nav-litem">
+                                            <a href="https://cwc.swjtu.edu.cn/">计划财务处</a>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </nav>
+                            <!-- /Nav -->
+                        </div>
+                    </div>
+                </header>
+                <!-- /Header -->
+                
+                <div class="banners ">&nbsp;
+                    <div id="heromain">
+                        <div id="indexbanner">
+                            <div class="herowrap">
+                                <ul class="herobd clearfix" style="width: 1274px; border: none; margin: 0px; width: 1274px;">
+                                    <li class="hero" style="width: 1274px; border: none; margin: 0px; left: 0px;">
+                                        <a href="https://www.swjtu.edu.cn" target="_blank">
+                                            <div class="aaaaaa" style="width: 100%; height: 100%; background: url(images/1-1x.jpg);">
+                                                <div style="height: 80px;">
+                                                </div>
+                                                <div style="width: 1274px; margin-right: 0px; margin-left: 0px; height: 70px; background-image: url(images/bgx.png); background-repeat: repeat-x;">
+                                                    <div align="left" style="padding-top: 20px; padding-left: 30px; height: 80px; width: 1274px; overflow: hidden;">
+                                                        <font color="#ffffff" style="font-size: 30px;"></font>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </a>
+                                    </li>
+                                    <li class="hero" style="width: 1274px; border: none; margin: 0px; left: 0px;">
+                                        <a href="https://www.swjtu.edu.cn" target="_blank">
+                                            <div class="aaaaaa" style="width: 100%; height: 100%; background: url(images/4-1x.jpg);">
+                                                <div style="height: 80px;">
+                                                </div>
+                                                <div style="width: 1274px; margin-right: 0px; margin-left: 0px; height: 70px; background-image: url(images/bgx.png); background-repeat: repeat-x;">
+                                                    <div align="left" style="padding-top: 20px; padding-left: 30px; height: 80px; width: 1274px; overflow: hidden;">
+                                                        <font color="#ffffff" style="font-size: 30px;"></font>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </a>
+                                    </li>
+                                    <li class="hero" style="width: 1274px; border: none; margin: 0px; left: 1274px;">
+                                        <a href="https://www.swjtu.edu.cn" target="_blank">
+                                            <div class="aaaaaa" style="width: 100%; height: 100%; background: url(images/5-1x.jpg);">
+                                                <div style="height: 80px;">
+                                                </div>
+                                                <div style="width: 1274px; margin-right: 0px; margin-left: 0px; height: 70px; background-image: url(images/bgx.png); background-repeat: repeat-x;">
+                                                    <div align="left" style="padding-top: 20px; padding-left: 30px; height: 80px; width: 1274px; overflow: hidden;">
+                                                        <font color="#ffffff" style="font-size: 30px;"> </font>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </a>
+                                    </li>
+                                    <li class="hero" style="width: 1274px; border: none; margin: 0px; left: 2548px;">
+                                        <a href="https://www.swjtu.edu.cn" target="_blank">
+                                            <div class="aaaaaa" style="width: 100%; height: 100%; background: url(images/3-1x.jpg);">
+                                                <div style="height: 80px;">
+                                                </div>
+                                                <div style="width: 1274px; margin-right: 0px; margin-left: 0px; height: 70px; background-image: url(images/bgx.png); background-repeat: repeat-x;">
+                                                    <div align="left" style="padding-top: 20px; padding-left: 30px; height: 80px; width: 1274px; overflow: hidden;">
+                                                        <font color="#ffffff" style="font-size: 30px;"></font>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </a>
+                                    </li>
+                                    <li class="hero" style="width: 1274px; border: none; margin: 0px; left: 3822px;">
+                                        <a href="https://www.swjtu.edu.cn" target="_blank">
+                                            <div class="aaaaaa" style="width: 100%; height: 100%; background: url(images/2-1x.jpg);">
+                                                <div style="height: 80px;">
+                                                </div>
+                                                <div style="width: 1274px; margin-right: 0px; margin-left: 0px; height: 70px; background-image: url(images/bgx.png); background-repeat: repeat-x;">
+                                                    <div align="left" style="padding-top: 20px; padding-left: 30px; height: 80px; width: 1274px; overflow: hidden;">
+                                                        <font color="#ffffff" style="font-size: 30px;"></font>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </a>
+                                    </li>
+                                </ul>
+                            </div>
+                            <div class="helper" align="left">
+                                <div class="mask-left">
+                                </div>
+                                <div class="mask-right">
+                                </div>
+                                <a href="javascript:void(0);" class="prev " style="margin-left: -60px; display: block; z-index: 4"></a><a href="javascript:void(0);" class="next " style="margin-right: -60px; display: block; z-index: 4"></a>
+                            </div>
+                        </div>
+                    </div>
+                    <script type="text/javascript">
+                        $.foucs({ direction: 'right' });
+                    </script>
+                </div>
+                
+                <div class="hiddingdiv2"></div>
+                
+                <!-- Content -->
+
+                <div class="container">
+                    <!-- Main Content -->
+                    <div class="main-contentx">
+
+                        <div class="main-contentleft left-sidebar">
+                            <!-- Life Style -->
+                            <div class="column-four-fifth">
+                                <h5 class="line">
+                                    <span>
+采购公告</span>
+                                    
+
+
+<a style="font-size: 12px; margin-left: 30px;">|</a><a href="cggg/gcjs.htm" style="font-size: 13px; margin-left: 30px;">工程建设</a>
+                                    
+                                    
+
+
+
+
+
+
+<a style="font-size: 12px; margin-left: 30px;">|</a><a href="cggg/yqsb.htm" style="font-size: 13px; margin-left: 30px;">仪器设备</a>
+                                    
+                                    
+
+
+
+
+
+
+<a style="font-size: 12px; margin-left: 30px;">|</a><a href="cggg/wzfw.htm" style="font-size: 13px; margin-left: 30px;">物资服务</a>
+                                    
+                                    
+
+
+
+
+                                </h5>
+
+                                <div class="outertightx m-r-no">
+
+                                    <ul class="block">
+
+
+<script language="javascript" src="/system/resource/js/centerCutImg.js"></script><script language="javascript" src="/system/resource/js/dynclicks.js"></script><script language="javascript" src="/system/resource/js/ajax.js"></script><li>
+                                        <p>
+                                            <span>[2026-10-14]</span>
+                                            <a href="info/1015/75077.htm">西南交通大学犀浦校区学生宿舍及宿舍配套用房修缮改造（一期）一站式学生服务大厅装饰工程项目（第二次）（J-GCCG-2026-016）竞争性磋商邀请</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_0" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-10-14]</span>
+                                            <a href="info/1016/75047.htm">西南交通大学钢轨铣磨车铣削单元配件采购项目（J-HWCG-2026-139）采购邀请</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_1" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-10-13]</span>
+                                            <a href="info/1016/74967.htm">西南交通大学犀浦校区学生宿舍及宿舍配套用房修缮改造（一期）一批次家具采购（SWJTUJ-HWCG-2026-0016）变更公告</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_2" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-10-13]</span>
+                                            <a href="info/1016/74957.htm">西南交通大学步进频率三维探地雷达项目（J-HWCG-2026-129）采购邀请</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_3" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-10-13]</span>
+                                            <a href="info/1016/74947.htm">西南交通大学地质数据三维建模分析系统项目（J-HWCG-2026-128）采购邀请</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_4" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-10-12]</span>
+                                            <a href="info/1016/74877.htm">医学院通用型凝胶成像仪采购项目（J-HWCG-2026-130）采购邀请</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_5" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-10-09]</span>
+                                            <a href="info/1016/74767.htm">东部（国际）校区图书馆2026年纸质图书采购项目（J-HWCG-2026-066）采购邀请</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_6" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-10-09]</span>
+                                            <a href="info/1016/74727.htm">西南交通大学东部（国际）校区图书馆设备采购项目（J-HWCG-2026-062）更正公告</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_7" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-10-08]</span>
+                                            <a href="info/1016/74577.htm">西南交通大学车辆轨道运行环境模拟舱项目（J-HWCG-2026-122）投标邀请</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_8" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-09-29]</span>
+                                            <a href="info/1015/74417.htm">西南交通大学犀浦校区学生宿舍及宿舍配套用房修缮改造（一期）一站式学生服务大厅装饰工程项目（J-GCCG-2026-016）竞争性磋商邀请</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_9" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-09-29]</span>
+                                            <a href="info/1016/74397.htm">西南交通大学犀浦校区学生宿舍及宿舍配套用房修缮改造（一期）一批次家具采购项目（SWJTUJ-HWCG-2026-0016）投标邀请</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_10" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-09-29]</span>
+                                            <a href="info/1016/74387.htm">西南交通大学原子级前驱体射频刻蚀装置项目（J-HWCG-2026-101）投标邀请</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_11" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-09-29]</span>
+                                            <a href="info/1015/74367.htm">西南交通大学犀浦校区快递中心（南区）改扩建钢结构专业分包项目（J-GCCG-2026-015）采购邀请</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_12" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-09-29]</span>
+                                            <a href="info/1016/74327.htm">西南交通大学铁路柔性中压直流牵引供电模拟与功率分析设备采购项目（J-HWCG-2026-114）投标邀请</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_13" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<li>
+                                        <p>
+                                            <span>[2026-09-28]</span>
+                                            <a href="info/1016/74307.htm">西南交通大学舒适性及安全性智能综合评估装置项目（J-HWCG-2026-104）投标邀请</a>
+                                        </p>
+                                    </li>
+                                    
+    <span id="section_u3_14" style="display:none;"><hr style="height:1px;border:none;border-top:1px dashed #CCCCCC;"></span>
+<link rel="stylesheet" Content-type="text/css" href="/system/resource/css/pagedown/sys.css"><div class="pb_sys_common pb_sys_normal pb_sys_style1" style="margin-top:10px;text-align:center;"><span class="p_pages"><span class="p_first_d p_fun_d">首页</span><span class="p_prev_d p_fun_d">上页</span><span class="p_no_d">1</span><span class="p_no"><a href="cggg/328.htm">2</a></span><span class="p_no"><a href="cggg/327.htm">3</a></span><span class="p_no"><a href="cggg/326.htm">4</a></span><span class="p_no"><a href="cggg/325.htm">5</a></span><span class="p_dot">...</span><span class="p_no"><a href="cggg/1.htm">329</a></span><span class="p_next p_fun"><a href="cggg/328.htm">下页</a></span><span class="p_last p_fun"><a href="cggg/1.htm">尾页</a></span></span></div><script>_showDynClickBatch(['dynclicks_u3_75077','dynclicks_u3_75047','dynclicks_u3_74967','dynclicks_u3_74957','dynclicks_u3_74947','dynclicks_u3_74877','dynclicks_u3_74767','dynclicks_u3_74727','dynclicks_u3_74577','dynclicks_u3_74417','dynclicks_u3_74397','dynclicks_u3_74387','dynclicks_u3_74367','dynclicks_u3_74327','dynclicks_u3_74307'],[75077,75047,74967,74957,74947,74877,74767,74727,74577,74417,74397,74387,74367,74327,74307],"wbnews", 1463493268)</script></ul>
+                            </div>
+                            </div>                            
+
+                            <!-- /Life Style -->
+
+                        </div>
+
+                        <div class="column-four-fifth"></div>
+                    </div>
+                    <!-- /Main Content -->
+                    <!-- Left Sidebar -->
+<div class="column-one-fourth2">
+                    
+
+                        <h5 class="line"><span>其他服务</span> </h5>
+                        <div class="outerwide2">
+                            <ul class="block2">
+                                <li>         
+                                    <a href="https://caigou.swjtu.edu.cn/sso/index.htm">
+                                        <img src="../../img/school.png" alt="校内用户登录" class="alignleft" />
+                                    </a>
+                                    <p>
+                                        <span>校内用户登陆</span>
+                                        <a href="https://caigou.swjtu.edu.cn/sso/index.htm">校内统一身份认证平台登录</a>
+                                    </p>
+                                </li>
+
+                                <li>
+                                    <a href="">
+                                        <img src="../../img/user.png" alt="校外用户登录" class="alignleft" />
+                                    </a>
+                                    <p>
+                                        <span>校外用户登陆</span>
+                                        供应商/招标代理/校外评审专家登录<br />                                        
+                                        <a href="https://caigou.swjtu.edu.cn/home/login.htm">[<img src="../../images/new.gif" />新版登录]</a>&nbsp;&nbsp;
+                                        <a href="https://zsc.swjtu.edu.cn/WF_CG/login_xnjd.jsp">[旧版登录]</a>
+                                        <!--http://zsc.swjtu.edu.cn/WF_CG/login.html-->
+                                    </p>
+
+                                </li>
+                                <li>
+                                    <a>
+                                        <img src="../../img/doctor.png" alt="专家注册" class="alignleft" /></a>
+                                    <p>
+                                        <span>专家注册</span>
+                                        <a>校内/校内外专家注册</a>
+                                    </p>
+
+                                </li>
+                                <li>
+                                    <a href="">
+                                        <img src="../../img/buisnessman.png" alt="供应商注册" class="alignleft" /></a>
+                                    <p>
+                                        <span>供应商信息录入</span>
+                                        校内/供应商信息录入<br />                                        
+                                        <a href="https://caigou.swjtu.edu.cn/gyszc.htm">[<img src="../../images/new.gif" />新版登录]</a>&nbsp;&nbsp;
+                                        <a href="http://zsc.swjtu.edu.cn/WF_CG/wf_gys.jsp">[旧版登录]</a>
+                                    </p>
+
+                                </li>
+                                <li>
+                                    <a href="http://jbbidding.swjtu.edu.cn">
+                                        <img src="../../img/auction_mallet.png" alt="竞价平台" class="alignleft" /></a>
+                                    <p>
+                                        <span>竞价平台</span>
+                                        <a href="http://jbbidding.swjtu.edu.cn">校内/竞价平台登录入口</a>
+                                    </p>
+
+                                </li>
+                            </ul>
+                        </div>
+                        
+
+
+</div>
+                    <div class="column-one-fourth">
+                        <h5 class="line">
+                            <span>联系我们</span>
+                            
+                        </h5>
+                        <div class="outertight2">
+                            <ul class="block3">
+                                <li>
+                                    <p>
+                                        <a style="text-decoration:none">•电话：028-66367322</a>
+                                    </p>
+                                </li>
+                                <li>
+                                    <p>
+                                        <a style="text-decoration:none">•邮箱：ztb@swjtu.edu.cn</a>
+                                    </p>
+                                </li>
+                                <li>
+                                    <p>
+                                        <a style="text-decoration:none">•地址：四川省成都市郫都区犀安路999号西南交通大学A30信箱</a>
+                                    </p>
+                                </li>
+                                
+                                <li>
+                                    <p>
+                                        <a style="text-decoration:none">•邮编：611756</a>
+                                    </p>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="column-one-fourth">
+                        <h5 class="line">
+                            <span>监督保障</span>
+                            
+                        </h5>
+                        <div class="outertight2">
+                            <ul class="block3">
+                                <li>
+                                    <p>
+                                        <a style="text-decoration:none">•监督单位：西南交通大学监察处</a>
+                                    </p>
+                                </li>
+                                <li>
+                                    <p>
+                                        <a style="text-decoration:none">•监督电话：(028)66366465</a>
+                                    </p>
+                                </li>
+                                <li>
+                                    <p>
+                                        <a href="http://jw.swjtu.edu.cn/" style="text-decoration:none">•网络举报平台：点击此处进入</a>
+                                    </p>
+                                </li>
+                                
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="column-one-fourth">
+                        <h5 class="line">
+                            <span>关注招标办公众号获取更多信息</span>
+
+                        </h5>
+                        <div class="outertight2">
+                            <img src="img/qrcode.jpg" alt="MyPassion" width="100px" class="alignleft" />
+                        </div>
+                    </div>
+                </div>
+
+
+                <!-- / Content -->
+
+                <!-- Footer -->
+                <footer id="footer">
+                <div class="container2">                   
+                    <div class="column-all">
+                        <h5 class="line"><span>校内链接</span>
+                            <a href="#" style="font-size:13px;margin-left:30px;">学校主页</a>
+                            <a style="font-size:12px;margin-left:30px;">|</a>
+                            <a href="#" style="font-size:13px;margin-left:30px;">计划财务处</a>
+                        </h5>
+                    </div>                   
+                </div>
+                <div class="container2">                   
+                    <div class="column-all">
+                        <h5 class="line"><span>友情链接</span>
+                            <a href="http://www.ccgp.gov.cn/" style="font-size:13px;margin-left:30px;">中国政府采购网</a>
+                            <a style="font-size:12px;margin-left:30px;">|</a>
+                            <a href="http://www.zycg.gov.cn/" style="font-size:13px;margin-left:30px;">中央政府采购网</a>
+                            <a style="font-size:12px;margin-left:30px;">|</a>
+                             <a href="http://www.zfcg.edu.cn/" style="font-size:13px;margin-left:30px;">教育部中国教育政府采购网</a>
+                            <a style="font-size:12px;margin-left:30px;">|</a>
+                            <a href="http://www.ccgp-sichuan.gov.cn/" style="font-size:13px;margin-left:30px;">四川政府采购网</a>
+                            <a style="font-size:12px;margin-left:30px;">|</a>
+                             <a href="http://www.spprec.com/" style="font-size:13px;margin-left:30px;">四川省公共资源交易服务中心</a>                           
+
+                        </h5>
+                        
+                    </div>
+                    <p class="copyright">版权所有：西南交通大学 Copyright &copy; 2025. All rights reserved.</p>
+                </div>
+            </footer>
+                <!-- / Footer -->
+
+            </div>
+        </div>
+    </div>
+    <!-- / Body Wrapper -->
+
+
+    <link rel="stylesheet" type="text/css" href="css/footandsearch.css" />
+
+</body>
+
+</html>
