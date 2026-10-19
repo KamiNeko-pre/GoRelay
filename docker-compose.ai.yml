@@ -1,0 +1,141 @@
+# Overlay: docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
+# The runner is private; no host port and no Docker socket/host filesystem mount.
+x-logging: &bounded-logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+
+services:
+  app:
+    environment: &ai-environment
+      GORELAY_ADMIN_TOKEN: ${GORELAY_ADMIN_TOKEN:?set an admin bearer token}
+      GORELAY_AI_BASE_URL: ${GORELAY_AI_BASE_URL:-}
+      GORELAY_AI_MODEL: ${GORELAY_AI_MODEL:-}
+      GORELAY_AI_API_KEY: ${GORELAY_AI_API_KEY:-}
+      GORELAY_SPEND_POLICY_PATH: ${GORELAY_SPEND_POLICY_PATH:-}
+      GORELAY_AI_CONTEXT_WINDOW_TOKENS: ${GORELAY_AI_CONTEXT_WINDOW_TOKENS:-1000000}
+      GORELAY_AI_COMPACT_AT_TOKENS: ${GORELAY_AI_COMPACT_AT_TOKENS:-500000}
+      GORELAY_AI_COMPACT_TO_TOKENS: ${GORELAY_AI_COMPACT_TO_TOKENS:-400000}
+      GORELAY_AI_MAX_COMPLETION_TOKENS: ${GORELAY_AI_MAX_COMPLETION_TOKENS:-384000}
+      GORELAY_AI_REASONING_EFFORT: ${GORELAY_AI_REASONING_EFFORT:-high}
+      GORELAY_RUN_TIMEOUT: ${GORELAY_RUN_TIMEOUT:-0s}
+      GORELAY_INFORMATION_REQUEST_TIMEOUT: ${GORELAY_INFORMATION_REQUEST_TIMEOUT:-0s}
+      GORELAY_BROWSER_MAX_FAILED_PLANS: ${GORELAY_BROWSER_MAX_FAILED_PLANS:-3}
+      GORELAY_BROWSER_ACTION_TIMEOUT: ${GORELAY_BROWSER_ACTION_TIMEOUT:-30s}
+      GORELAY_BROWSER_BINARY: ${GORELAY_BROWSER_BINARY:-}
+      GORELAY_BROWSER_NODE: ${GORELAY_BROWSER_NODE:-}
+      GORELAY_BROWSER_SCRIPT: ${GORELAY_BROWSER_SCRIPT:-scripts/information-browser.cjs}
+      GORELAY_PLAYWRIGHT_MODULE: ${GORELAY_PLAYWRIGHT_MODULE:-}
+      GORELAY_RUN_STAGNATION_CALLS: ${GORELAY_RUN_STAGNATION_CALLS:-20}
+      GORELAY_PROGRAM_HTTP_REQUESTS: ${GORELAY_PROGRAM_HTTP_REQUESTS:-100}
+      GORELAY_PROGRAM_MAX_BYTES: ${GORELAY_PROGRAM_MAX_BYTES:-8388608}
+      GORELAY_PROGRAM_MAX_ITEMS: ${GORELAY_PROGRAM_MAX_ITEMS:-1000}
+      GORELAY_PROGRAM_MAX_OUTPUT_BYTES: ${GORELAY_PROGRAM_MAX_OUTPUT_BYTES:-2097152}
+      GORELAY_AGENT_CONCURRENCY: ${GORELAY_AGENT_CONCURRENCY:-2}
+      GORELAY_ACQUISITION_PROXY: ${GORELAY_ACQUISITION_PROXY:-}
+      GORELAY_EMBED_BASE_URL: ${GORELAY_EMBED_BASE_URL:-}
+      GORELAY_EMBED_MODEL: ${GORELAY_EMBED_MODEL:-}
+      GORELAY_EMBED_API_KEY: ${GORELAY_EMBED_API_KEY:-}
+      GORELAY_EMBED_DIMENSIONS: ${GORELAY_EMBED_DIMENSIONS:-}
+      GORELAY_SEARCH_API_KEY: ${GORELAY_SEARCH_API_KEY:-}
+      GORELAY_SEARCH_ENDPOINT: ${GORELAY_SEARCH_ENDPOINT:-https://api.search.brave.com/res/v1/web/search}
+      GORELAY_RUNNER_URL: http://lua-runner:8091
+      GORELAY_RUNNER_TOKEN: ${GORELAY_RUNNER_TOKEN:?set a private runner token}
+      GORELAY_QDRANT_URL: http://qdrant:6333
+      GORELAY_QDRANT_COLLECTION: ${GORELAY_QDRANT_COLLECTION:-gorelay}
+      GORELAY_QDRANT_API_KEY: ${GORELAY_QDRANT_API_KEY:-}
+  worker:
+    environment:
+      GORELAY_RUNNER_URL: http://lua-runner:8091
+      GORELAY_RUNNER_TOKEN: ${GORELAY_RUNNER_TOKEN:?set a private runner token}
+      # Metadata for the canonical index fingerprint; no embedding credentials.
+      GORELAY_EMBED_BASE_URL: ${GORELAY_EMBED_BASE_URL:-}
+      GORELAY_EMBED_MODEL: ${GORELAY_EMBED_MODEL:-}
+      GORELAY_EMBED_DIMENSIONS: ${GORELAY_EMBED_DIMENSIONS:-}
+      GORELAY_CHUNK_RUNES: ${GORELAY_CHUNK_RUNES:-600}
+      GORELAY_CHUNK_OVERLAP: ${GORELAY_CHUNK_OVERLAP:-80}
+      # Each isolated VM can run for 20s plus private HTTP dispatch overhead.
+      LUA_SPIDER_ENGINE_LUA_TIMEOUT: 35
+  agent-worker:
+    image: gorelay:${GORELAY_IMAGE_TAG:-local}
+    logging: *bounded-logging
+    build: {context: ., target: runtime}
+    command: [/app/agent-worker]
+    environment:
+      <<: *ai-environment
+      LUA_SPIDER_MYSQL_DSN: root:${MYSQL_ROOT_PASSWORD}@tcp(mysql:3306)/lua_crawler?charset=utf8mb4&parseTime=True&loc=UTC
+      LUA_SPIDER_REDIS_ADDR: redis:6379
+    depends_on:
+      app: {condition: service_healthy}
+      lua-runner: {condition: service_healthy}
+    restart: unless-stopped
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    logging: *bounded-logging
+    environment:
+      QDRANT__SERVICE__API_KEY: ${GORELAY_QDRANT_API_KEY:-}
+    volumes: [qdrant-data:/qdrant/storage]
+    restart: unless-stopped
+    # Private only: access via app/indexer, no public vector DB port.
+    healthcheck:
+      test: [CMD-SHELL, 'bash -ec ''exec 3<>/dev/tcp/127.0.0.1/6333; printf "GET /readyz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; IFS= read -r status <&3; [[ "$$status" == *" 200 "* ]]''']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+  information-worker:
+    image: gorelay:${GORELAY_IMAGE_TAG:-local}
+    logging: *bounded-logging
+    build: {context: ., target: runtime}
+    command: [/app/information-worker]
+    environment:
+      <<: *ai-environment
+      LUA_SPIDER_MYSQL_DSN: root:${MYSQL_ROOT_PASSWORD}@tcp(mysql:3306)/lua_crawler?charset=utf8mb4&parseTime=True&loc=UTC
+      LUA_SPIDER_REDIS_ADDR: redis:6379
+    depends_on:
+      app: {condition: service_healthy}
+    restart: unless-stopped
+  indexer:
+    image: gorelay:${GORELAY_IMAGE_TAG:-local}
+    logging: *bounded-logging
+    build:
+      context: .
+      target: runtime
+    command: [/app/indexer]
+    profiles: [indexing]
+    environment:
+      <<: *ai-environment
+      LUA_SPIDER_MYSQL_DSN: root:${MYSQL_ROOT_PASSWORD}@tcp(mysql:3306)/lua_crawler?charset=utf8mb4&parseTime=True&loc=UTC
+    depends_on:
+      app:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: "on-failure:3"
+  lua-runner:
+    image: gorelay-runner:${GORELAY_IMAGE_TAG:-local}
+    logging: *bounded-logging
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+    environment:
+      GORELAY_RUNNER_TOKEN: ${GORELAY_RUNNER_TOKEN:?set a private runner token}
+      GORELAY_ACQUISITION_PROXY: ${GORELAY_ACQUISITION_PROXY:-}
+      GORELAY_RUN_TIMEOUT: ${GORELAY_RUN_TIMEOUT:-0s}
+      GORELAY_PROGRAM_HTTP_REQUESTS: ${GORELAY_PROGRAM_HTTP_REQUESTS:-100}
+      GORELAY_PROGRAM_MAX_BYTES: ${GORELAY_PROGRAM_MAX_BYTES:-8388608}
+      GORELAY_PROGRAM_MAX_ITEMS: ${GORELAY_PROGRAM_MAX_ITEMS:-1000}
+      GORELAY_PROGRAM_MAX_OUTPUT_BYTES: ${GORELAY_PROGRAM_MAX_OUTPUT_BYTES:-2097152}
+      GOMEMLIMIT: 96MiB
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    mem_limit: 192m
+    cpus: 1.0
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://localhost:8091/healthz]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+volumes:
+  qdrant-data:

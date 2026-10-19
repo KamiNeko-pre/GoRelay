@@ -1,6 +1,11 @@
+x-logging: &bounded-logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+
 services:
   mysql:
     image: mysql:8.4
+    logging: *bounded-logging
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
       MYSQL_DATABASE: lua_crawler
@@ -14,6 +19,7 @@ services:
 
   redis:
     image: redis:7.4-alpine
+    logging: *bounded-logging
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -24,6 +30,8 @@ services:
       - redis-data:/data
 
   app:
+    image: gorelay:${GORELAY_IMAGE_TAG:-local}
+    logging: *bounded-logging
     build:
       context: .
       target: runtime
@@ -31,8 +39,6 @@ services:
       GIN_MODE: release
       LUA_SPIDER_MYSQL_DSN: root:${MYSQL_ROOT_PASSWORD}@tcp(mysql:3306)/lua_crawler?charset=utf8mb4&parseTime=True&loc=UTC
       LUA_SPIDER_REDIS_ADDR: redis:6379
-      LUA_SPIDER_APP_LUA_PATH: /app/scripts/hackernews_collection.lua
-      LUA_SPIDER_ENGINE_WORKER_COUNT: "0"
     depends_on:
       mysql:
         condition: service_healthy
@@ -48,6 +54,8 @@ services:
       retries: 20
 
   publisher:
+    image: gorelay:${GORELAY_IMAGE_TAG:-local}
+    logging: *bounded-logging
     build:
       context: .
       target: runtime
@@ -63,6 +71,8 @@ services:
     restart: unless-stopped
 
   worker:
+    image: gorelay:${GORELAY_IMAGE_TAG:-local}
+    logging: *bounded-logging
     build:
       context: .
       target: runtime
@@ -70,8 +80,7 @@ services:
     environment:
       LUA_SPIDER_MYSQL_DSN: root:${MYSQL_ROOT_PASSWORD}@tcp(mysql:3306)/lua_crawler?charset=utf8mb4&parseTime=True&loc=UTC
       LUA_SPIDER_REDIS_ADDR: redis:6379
-      LUA_SPIDER_ENGINE_WORKER_COUNT: ${WORKERS:-4}
-      LUA_SPIDER_APP_LUA_PATH: /app/scripts/hackernews_collection.lua
+      LUA_SPIDER_ENGINE_WORKER_COUNT: ${WORKERS:-8}
       LUA_SPIDER_RULES_FILE: /app/configs/rules.yaml
     depends_on:
       app:
