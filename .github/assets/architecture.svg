@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+<title id="title">GoRelay 的三层架构</title><desc id="desc">Agent 负责规划、工具构建和修复；Go 执行层负责可靠调度、隔离执行与故障接管；数据层保存结构化数据及来源证据，并独立建立索引。执行反馈回到 Agent，推动按需修复。</desc>
+<rect x="1" y="1" width="1198" height="418" rx="12" fill="#f6f9fa" stroke="#dce5e7"/>
+<g font-family="Segoe UI,Microsoft YaHei,Noto Sans CJK SC,sans-serif">
+<text x="40" y="43" font-size="16" font-weight="600" fill="#445e65">一个目标，从能力构建走向持续交付</text>
+<path d="M40 63h1120" stroke="#dce5e7"/>
+<g fill="#fff" stroke="#ccdadd"><rect x="40" y="88" width="338" height="234" rx="10"/><rect x="431" y="88" width="338" height="234" rx="10"/><rect x="822" y="88" width="338" height="234" rx="10"/></g>
+<circle cx="68" cy="118" r="5" fill="#176b65"/><text x="84" y="124" font-size="15" font-weight="600" fill="#176b65">AGENT</text>
+<text x="62" y="164" font-size="24" font-weight="700" fill="#19343d">规划与工具构建</text>
+<text x="62" y="200" font-size="17" fill="#405b63">目标理解 → 观察 → 行动 → 检查</text>
+<text x="62" y="229" font-size="17" fill="#405b63">Lua 生成、验证与工具注册</text>
+<text x="62" y="258" font-size="17" fill="#405b63">执行反馈纠错 · 停滞检测</text>
+<path d="M62 277h294" stroke="#e3eaec"/><text x="62" y="303" font-size="14" fill="#526b72">Agent Loop · Code as Action</text>
+<circle cx="459" cy="118" r="5" fill="#2c5f9c"/><text x="475" y="124" font-size="15" font-weight="600" fill="#2c5f9c">EXECUTION</text>
+<text x="453" y="164" font-size="24" font-weight="700" fill="#19343d">可靠调度与执行</text>
+<text x="453" y="200" font-size="17" fill="#405b63">API / Lua / 按需授权 Browser</text>
+<text x="453" y="229" font-size="17" fill="#405b63">Outbox → Redis Streams → Worker</text>
+<text x="453" y="258" font-size="17" fill="#405b63">隔离 Runner · 租约与故障接管</text>
+<path d="M453 277h294" stroke="#e3eaec"/><text x="453" y="303" font-size="14" fill="#526b72">已验证的工具交给 Go 重复执行</text>
+<circle cx="850" cy="118" r="5" fill="#8a5a24"/><text x="866" y="124" font-size="15" font-weight="600" fill="#8a5a24">KNOWLEDGE</text>
+<text x="844" y="164" font-size="24" font-weight="700" fill="#19343d">数据沉淀与检索</text>
+<text x="844" y="200" font-size="17" fill="#405b63">结构化记录 · 来源与版本</text>
+<text x="844" y="229" font-size="17" fill="#405b63">独立索引 · BM25 / 向量 / RRF</text>
+<text x="844" y="258" font-size="17" fill="#405b63">证据检索 · 原文引用与追溯</text>
+<path d="M844 277h294" stroke="#e3eaec"/><text x="844" y="303" font-size="14" fill="#526b72">RAG 与采集执行独立运行</text>
+<g fill="none" stroke="#7f969c" stroke-width="2"><path d="M386 208h36m-6-5 6 5-6 5M777 208h36m-6-5 6 5-6 5"/><path d="M600 334v38H209v-31m-5 6 5-6 5 6" stroke-dasharray="5 5"/></g>
+<rect x="290" y="358" width="230" height="27" rx="4" fill="#f6f9fa"/><text x="405" y="378" text-anchor="middle" font-size="15" fill="#526b72">执行反馈与来源变化，按需修复</text>
+</g></svg>
