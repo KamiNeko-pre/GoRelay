@@ -1,4 +1,4 @@
-import { readPath, compareSnapshots } from "./analysis.js";
+import { readPath, compareSnapshots } from "./analysis.js?v=20260911b";
 import {
   dataset,
   field,
@@ -9,14 +9,16 @@ import {
   fieldProfile,
   filterRows,
   csv,
-} from "./workbench.js";
+} from "./workbench.js?v=20260911b";
 import {
   fetchRules,
   fetchSnapshots,
+  fetchAllSnapshots,
   fetchTaskEvents,
   createTask,
+  createJDBatch,
   fetchTask,
-} from "./api.js";
+} from "./api.js?v=20260911b";
 
 const $ = (selector) => document.querySelector(selector);
 const escape = (value) =>
@@ -74,6 +76,7 @@ const state = {
   data: dataset([], []),
   query: "",
   change: "all",
+  tableScope: "all", // all=跨全部快照去重累计；latest=仅每来源最新快照
   sort: "rank",
   page: 1,
   pageSize: 15,
@@ -163,7 +166,7 @@ function renderNavigation() {
     ],
     state.source,
   );
-  $("#collect").disabled = !state.rules.some((rule) => rule.script && rule.url);
+  $("#collect").disabled = state.rules.filter((rule) => rule.script && rule.url).length < 4;
 }
 
 function applyView() {
@@ -200,12 +203,9 @@ async function load() {
   $("#refresh").disabled = true;
   document.body.classList.add("loading");
   try {
-    const from = new Date(
-      Date.now() - Number($("#range").value) * 86400000,
-    ).toISOString();
     const [rules, records] = await Promise.all([
       fetchRules(),
-      fetchSnapshots({ from, limit: 200 }),
+      fetchAllSnapshots({ limit: 200, maxBatches: 20 }),
     ]);
     if (version !== state.request) return;
     state.rules = rules;
@@ -221,9 +221,9 @@ async function load() {
     $("#last-sync").textContent =
       `同步于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
     $("#data-boundary").textContent =
-      records.length >= 200
-        ? "已达最新 200 次运行上限，分析仅覆盖已加载数据"
-        : "分析范围：已加载的真实采集快照";
+      records.length >= 4000
+        ? `已加载最近 ${records.length} 次运行，更早历史未展开`
+        : `分析范围：全部 ${records.length} 次已结束运行（跨时间窗累计）`;
     renderNavigation();
     render();
   } catch (error) {
@@ -247,7 +247,7 @@ function render() {
   const sources = selectedSources();
   const runs = sources.flatMap((s) => s.runs);
   $("#scope-caption").textContent =
-    `${sources.length} 个来源 · ${runs.length} 次运行 · ${sources.reduce((n, s) => n + s.items.length, 0)} 条最新记录`;
+    `${sources.length} 个来源 · ${runs.length} 次运行 · 累计 ${number(state.data.observations ?? 0)} 次观测 · ${sources.reduce((n, s) => n + s.items.length, 0)} 条最新记录`;
   if (state.view === "analysis") {
     renderAnalysis();
     renderTable();
@@ -314,9 +314,9 @@ function renderAnalysis() {
   const comparisons = sources.filter((s) => s.previous).length;
   $("#metrics").innerHTML =
     metric(
-      "最新快照记录",
-      number(rows.length),
-      `${sources.filter((s) => s.latest).length} 个来源 · 累计 ${number(sources.reduce((n, s) => n + s.history.reduce((m, h) => m + h.items.length, 0), 0))} 次观测`,
+      "累计观测",
+      number(state.data.observations ?? 0),
+      `${sources.filter((s) => s.latest).length} 个来源 · 最新快照 ${number(rows.length)} 条记录 · ${success} 次成功运行`,
       "条",
     ) +
     metric(
@@ -343,7 +343,7 @@ function renderAnalysis() {
     .filter((row) => row.scoreDelta > 0)
     .sort((a, b) => b.scoreDelta - a.scoreDelta)[0];
   let insight = rows.length
-    ? `当前 ${rows.length} 条记录，最近相邻快照中 ${changes} 条字段变化、${added} 条新出现；${sources.filter((s) => s.health.status === "healthy").length} 个来源的数据健康。`
+    ? `跨 ${sources.filter((s) => s.latest).length} 个来源累计观测 ${number(state.data.observations ?? 0)} 条；当前最新快照 ${rows.length} 条记录，最近相邻快照中 ${changes} 条字段变化、${added} 条新出现；${sources.filter((s) => s.health.status === "healthy").length} 个来源的数据健康。`
     : "还没有成功采集数据，暂无观测结论。";
   if (source) {
     insight = growth
@@ -711,18 +711,38 @@ function renderTable() {
     state.sort = "rank";
     $("#sort").value = "rank";
   }
+  const cumulative = state.tableScope === "all";
+  const baseRows = cumulative
+    ? sources.flatMap((s) => s.allRows)
+    : sources.flatMap((s) => s.rows);
+  // 累计模式不做相邻变化筛选，强制 all，避免被上次的变化过滤条件滤空
   const result = filterRows(
-    sources.flatMap((s) => s.rows),
-    state,
+    baseRows,
+    cumulative ? { ...state, change: "all" } : state,
   );
   state.rows = result.rows;
   state.page = result.page;
   state.filtered = result.all;
   $("#data-total").textContent = result.total;
-  $("#table-caption").textContent = source
-    ? `${source.rule.name} · ${date(source.latest?.finishedAt)} · ${source.previous ? "对比上一份成功快照" : "首次观测"}`
-    : "每个来源的最新成功快照 · 指标保留原始单位";
+  const snapshotCount = sources.reduce(
+    (n, s) => n + s.history.length,
+    0,
+  );
+  $("#table-caption").textContent = cumulative
+    ? source
+      ? `${source.rule.name} · 跨 ${source.history.length} 份成功快照去重累计 · 指标保留原始单位`
+      : `跨 ${snapshotCount} 份成功快照按链接去重累计 · 全部真实采集记录`
+    : source
+      ? `${source.rule.name} · ${date(source.latest?.finishedAt)} · ${source.previous ? "对比上一份成功快照" : "首次观测"}`
+      : "每个来源的最新成功快照 · 指标保留原始单位";
   $("#export").disabled = !result.total;
+  // 变化筛选只在"仅最新快照"相邻对比时有意义
+  $("#change-tabs").hidden = cumulative;
+  document.querySelectorAll("[data-scope]").forEach((el) => {
+    const on = el.dataset.scope === state.tableScope;
+    el.classList.toggle("active", on);
+    el.setAttribute("aria-pressed", String(on));
+  });
   document.querySelectorAll("[data-change]").forEach((el) => {
     el.classList.toggle("active", el.dataset.change === state.change);
     el.setAttribute("aria-pressed", String(el.dataset.change === state.change));
@@ -1008,9 +1028,17 @@ function pendingNotice() {
   if (state.pending.size)
     banner(
       [...state.pending]
-        .map(([id, status]) => `任务 #${id}：${status}`)
+        .map(([id, task]) => `${task.name || `任务 #${id}`}：${task.status}`)
         .join("；"),
     );
+}
+function trackTask(task) {
+  const rule = state.rules.find((candidate) => candidate.id === task.target);
+  state.pending.set(task.id, {
+    name: rule?.source || rule?.name || task.target || `任务 #${task.id}`,
+    status: "正在排队",
+  });
+  watchTask(task.id);
 }
 async function watchTask(id, attempt = 0) {
   if (!state.pending.has(id)) return;
@@ -1024,10 +1052,16 @@ async function watchTask(id, attempt = 0) {
       await load();
       return;
     }
-    state.pending.set(id, task.status === "running" ? "正在采集" : "正在排队");
+    state.pending.set(id, {
+      ...state.pending.get(id),
+      status: task.status === "running" ? "正在采集" : "正在排队",
+    });
     pendingNotice();
   } catch (error) {
-    state.pending.set(id, `查询中断：${error.message}`);
+    state.pending.set(id, {
+      ...state.pending.get(id),
+      status: `查询中断：${error.message}`,
+    });
     pendingNotice();
   }
   if (attempt >= 60) {
@@ -1059,6 +1093,14 @@ $("#change-tabs").addEventListener("click", (event) => {
   const target = event.target.closest("[data-change]");
   if (target) {
     state.change = target.dataset.change;
+    state.page = 1;
+    renderTable();
+  }
+});
+$("#table-scope-tabs").addEventListener("click", (event) => {
+  const target = event.target.closest("[data-scope]");
+  if (target && target.dataset.scope !== state.tableScope) {
+    state.tableScope = target.dataset.scope;
     state.page = 1;
     renderTable();
   }
@@ -1120,7 +1162,31 @@ $("#export").addEventListener("click", () => {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
-$("#collect").addEventListener("click", openCollect);
+$("#collect").addEventListener("click", async () => {
+  const button = $("#collect");
+  button.disabled = true;
+  try {
+    const results = await createJDBatch(
+      state.rules,
+      `jd-batch-${crypto.randomUUID()}`,
+    );
+    const tasks = results
+      .filter((result) => result.status === "fulfilled")
+      .map((result) => result.value);
+    const failures = results.length - tasks.length;
+    tasks.forEach(trackTask);
+    banner(
+      failures
+        ? `已同时提交 ${tasks.length} 个 JD 来源；${failures} 个未能入队。`
+        : "四个 JD 来源已同时入队，正在等待 worker 接手。",
+      failures > 0,
+    );
+  } catch (error) {
+    banner(`无法启动四源 JD 采集：${error.message}`, true);
+  } finally {
+    renderNavigation();
+  }
+});
 $("#collect-rule").addEventListener("change", updateCollectRule);
 $("#collect-url").addEventListener("input", () => {
   state.submitKey = null;
@@ -1138,9 +1204,8 @@ $("#collect-form").addEventListener("submit", async (event) => {
       requestKey: state.submitKey,
     });
     $("#collect-dialog").close();
-    state.pending.set(task.id, "正在排队");
+    trackTask(task);
     pendingNotice();
-    watchTask(task.id);
   } catch (error) {
     $("#collect-error").textContent =
       `提交未确认：${error.message}。重试将使用相同请求编号。`;

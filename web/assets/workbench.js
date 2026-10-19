@@ -4,7 +4,7 @@ import {
   compareSnapshots,
   evaluateRuleHealth,
   stableJSON,
-} from "./analysis.js";
+} from "./analysis.js?v=20260911b";
 
 export function numeric(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
@@ -134,6 +134,37 @@ export function dataset(records, rules, now = new Date()) {
         status: "degraded",
         reason: `${missingKeys} 条缺少唯一键，${duplicates} 条键重复，差异分析不可靠`,
       });
+    // 累计全量：跨该来源所有成功快照，按 item_key 去重，保留最新一次观测（history 已按时间倒序）
+    const seenKeys = new Set();
+    const allRows = [];
+    for (const h of history) {
+      h.items.forEach((item, index) => {
+        const rawKey = readPath(item, rule.item_key);
+        const key =
+          rawKey === undefined || rawKey === null || rawKey === ""
+            ? null
+            : String(rawKey);
+        if (key !== null) {
+          if (seenKeys.has(key)) return;
+          seenKeys.add(key);
+        }
+        allRows.push({
+          item,
+          rule,
+          key,
+          index,
+          taskId: h.taskId,
+          at: h.finishedAt,
+          score: numeric(field(item, rule, "score")),
+          rank: numeric(field(item, rule, "rank")) ?? index + 1,
+          scoreDelta: null,
+          rankDelta: null,
+          before: null,
+          diff: [],
+          change: "baseline",
+        });
+      });
+    }
     return {
       rule,
       runs,
@@ -142,6 +173,7 @@ export function dataset(records, rules, now = new Date()) {
       previous,
       items,
       rows,
+      allRows,
       comparison,
       health,
       missingKeys,
@@ -152,6 +184,7 @@ export function dataset(records, rules, now = new Date()) {
     snapshots,
     sources,
     rows: sources.flatMap((s) => s.rows),
+    allRows: sources.flatMap((s) => s.allRows),
     observations: sources.reduce(
       (n, s) => n + s.history.reduce((m, h) => m + h.items.length, 0),
       0,

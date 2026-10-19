@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>GoRelay · 任务与数据工作台</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260905b" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260911b" />
     <script defer src="/assets/vendor/echarts.min.js"></script>
     <script defer src="/assets/vendor/lucide.min.js"></script>
-    <script type="module" src="/assets/app.js?v=20260905b"></script>
+    <script type="module" src="/assets/app.js?v=20260911b"></script>
   </head>
   <body>
     <a class="skip-link" href="#main">跳到主内容</a>
@@ -21,6 +21,7 @@
         ><i data-lucide="chevrons-up-down"></i>
       </div>
       <nav aria-label="主导航" class="nav">
+        <a href="/agent" title="Agent任务工作台"><i data-lucide="bot"></i>Agent任务</a>
         <a href="#analysis" data-view="analysis" class="active" title="数据分析"
           ><i data-lucide="chart-no-axes-combined"></i>数据分析</a
         >
@@ -73,7 +74,7 @@
             <p id="page-subtitle">公开数据的持续观察与变化追踪</p>
           </div>
           <button id="collect" class="primary">
-            <i data-lucide="play"></i><span>开始采集</span>
+            <i data-lucide="play"></i><span>开始四源 JD 采集</span>
           </button>
         </div>
         <div id="notice" role="status" hidden></div>
@@ -165,9 +166,19 @@
             <div class="table-tools">
               <div
                 class="segmented"
+                id="table-scope-tabs"
+                role="group"
+                aria-label="明细范围"
+              >
+                <button data-scope="all" class="active">累计全量</button
+                ><button data-scope="latest">仅最新快照</button>
+              </div>
+              <div
+                class="segmented"
                 id="change-tabs"
                 role="group"
                 aria-label="变化筛选"
+                hidden
               >
                 <button data-change="all" class="active">全部</button
                 ><button data-change="changed">有变化</button
