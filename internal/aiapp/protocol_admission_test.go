@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -49,7 +48,7 @@ func successfulRepairParent(t *testing.T, s *Service, run agentdata.Run, id, nam
 }
 
 func TestCapturedRepairMetadataCannotConsumeFirstProgramExecution(t *testing.T) {
-	raw, err := os.ReadFile("testdata/repair-metadata-admission-20261016.json")
+	raw, err := readPrivateReplayFixture(t, "repair-metadata-admission-20261016.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +120,7 @@ func TestCapturedRepairMetadataCannotConsumeFirstProgramExecution(t *testing.T) 
 // twelve heterogeneous details and a publishable adapter. It is saved-proposal
 // replay, not proof that a new model autonomously completes the task.
 func TestCapturedProtocolCorrectionRestoresCompleteAcquisition(t *testing.T) {
-	raw, err := os.ReadFile("testdata/repair-metadata-admission-20261016.json")
+	raw, err := readPrivateReplayFixture(t, "repair-metadata-admission-20261016.json")
 	if err != nil {
 		t.Fatal(err)
 	}

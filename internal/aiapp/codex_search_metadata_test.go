@@ -2,7 +2,6 @@ package aiapp
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 )
@@ -72,7 +71,7 @@ func TestCodexSearchKeepsModelRankingAndCountWithNativeMetadata(t *testing.T) {
 func TestCodexSearchSavedNativeReceiptReplay(t *testing.T) {
 	// Captured from the failed development task. This replays the transport
 	// boundary only; it neither fetches pages nor credits the task as successful.
-	raw, err := os.ReadFile("testdata/codex-search-metadata-20261011.jsonl")
+	raw, err := readPrivateReplayFixture(t, "codex-search-metadata-20261011.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}

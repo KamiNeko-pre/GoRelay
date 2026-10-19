@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,7 +14,7 @@ import (
 )
 
 func TestProviderTerminationFeedbackUsesObservedFactsAcrossHTTP(t *testing.T) {
-	raw, err := os.ReadFile("testdata/provider-length-below-requested-limit.json")
+	raw, err := readPrivateReplayFixture(t, "provider-length-below-requested-limit.json")
 	if err != nil {
 		t.Fatal(err)
 	}

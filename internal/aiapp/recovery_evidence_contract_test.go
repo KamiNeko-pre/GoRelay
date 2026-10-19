@@ -3,7 +3,6 @@ package aiapp
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +43,7 @@ func recoveryCounter(t *testing.T, r DeliveryRecovery, key string) int {
 }
 
 func TestRecoverySavedInspectionMustReachTheRepairDecision(t *testing.T) {
-	raw, err := os.ReadFile("testdata/recovery-premature-conclusion-20261016.json")
+	raw, err := readPrivateReplayFixture(t, "recovery-premature-conclusion-20261016.json")
 	if err != nil {
 		t.Fatal(err)
 	}

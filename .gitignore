@@ -80,3 +80,9 @@ __pycache__/
 /experiments/
 /scripts/experiments/
 /inputs/experiments/
+
+# Saved Agent executions and task planning remain private.
+/internal/aiapp/testdata/*.json
+/internal/aiapp/testdata/*.jsonl
+/internal/aiapp/testdata/private/
+/configs/agentbench/*.candidate.json
