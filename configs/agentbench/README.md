@@ -10,7 +10,7 @@
 go run ./cmd/agent-eval -mode validator -output output/validator-audit.json
 ```
 
-离线执行样本见 [inputs/ai](../../inputs/ai/README.md)，已完成实验的汇总见 [docs/benchmarks](../../docs/benchmarks/README.md)。
+离线执行样本见 [inputs/ai](../../inputs/ai/README.md)。
 
 ## 使用自己的任务集
 
