@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "gorelay": {
+      "type": "http",
+      "url": "http://127.0.0.1:18109/mcp",
+      "headers": {
+        "Authorization": "Bearer ${GORELAY_ADMIN_TOKEN}"
+      }
+    }
+  }
+}

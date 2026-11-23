@@ -1,0 +1,9 @@
+{
+  "currency": "UNSELECTED",
+  "date": "UNSELECTED",
+  "models": {
+    "replace_with_actual_chat_model": {"input_per_million": null, "output_per_million": null},
+    "replace_with_actual_embedding_model": {"input_per_million": null, "output_per_million": null}
+  },
+  "search_per_call": null
+}

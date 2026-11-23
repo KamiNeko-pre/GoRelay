@@ -1,0 +1,29 @@
+{
+  "request_key": "steam-cn-opportunities-v1",
+  "goal": "持续发现 Steam 中国区公开可购买的游戏机会，不指定固定游戏。优惠至少80%（两折或更低）或者当前价格不超过30元；每轮工作台最多展示10个。自主调查公开来源，选择或生成可复用Lua采集程序，每轮重新获取候选对象，不把首轮游戏列表写死。不登录、不购买、不绕过访问限制、不宣称史低。记录当前价格（整数分）、优惠百分比、币种、可购买性、标题、购买页面以及来源证据；缺价不当作零，免费作为零价事实展示。",
+  "interval_seconds": 86400,
+  "spec": {
+    "goal": "持续发现 Steam 中国区公开可购买的游戏机会，不指定固定游戏。优惠至少80%（两折或更低）或者当前价格不超过30元；每轮工作台最多展示10个。自主调查公开来源，选择或生成可复用Lua采集程序，每轮重新获取候选对象，不把首轮游戏列表写死。不登录、不购买、不绕过访问限制、不宣称史低。记录当前价格（整数分）、优惠百分比、币种、可购买性、标题、购买页面以及来源证据；缺价不当作零，免费作为零价事实展示。",
+    "schema_version": "steam-opportunity-v1",
+    "entity_field": "id",
+    "join_keys": ["id"],
+    "max_age_seconds": 86400,
+    "required_fields": [
+      {"name":"id","type":"string"},
+      {"name":"title","type":"string"},
+      {"name":"price_minor","type":"integer"},
+      {"name":"discount_percent","type":"integer"},
+      {"name":"currency","type":"string"},
+      {"name":"purchasable","type":"boolean"},
+      {"name":"purchase_url","type":"string"}
+    ]
+  },
+  "conditions": [
+    {"field":"currency","operator":"eq","value":"CNY"},
+    {"field":"purchasable","operator":"eq","value":true}
+  ],
+  "condition_groups": [
+    [{"field":"discount_percent","operator":"gte","value":80}],
+    [{"field":"price_minor","operator":"lte","value":3000}]
+  ]
+}

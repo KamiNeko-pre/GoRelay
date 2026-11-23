@@ -1,7 +1,6 @@
 app:
     port: 8080
-    lua_path: "./scripts/hackernews_collection.lua"
-    proxy: ""
+    proxy: "http://host.docker.internal:7897"
     pprof_port: 0
 
 mysql:
@@ -22,18 +21,8 @@ publisher:
     poll_interval_ms: 1000
     batch_timeout_seconds: 10
 
-cron:
-    spec: "@every 1m"
-
 engine:
-    worker_count: 15
-    task_queue_size: 1000
-    lua_timeout: 30
+    worker_count: 8
+    lua_timeout: 60
     http_timeout_direct: 5
     http_timeout_proxy: 15
-
-crawler:
-    request_delay_min: 500
-    request_delay_max: 3000
-    max_fission_depth: 2
-    max_fission_urls: 20

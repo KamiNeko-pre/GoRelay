@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	taskmodel "go-lua-crawler/internal/task"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
+	"go-lua-crawler/internal/testdb"
 )
 
 func TestTransitionCrawlTaskRejectsInvalidTransitionBeforeDatabase(t *testing.T) {
@@ -28,15 +26,7 @@ func TestTransitionCrawlTaskRejectsInvalidTransitionBeforeDatabase(t *testing.T)
 }
 
 func TestTransitionCrawlTaskCompareAndSet(t *testing.T) {
-	dsn := os.Getenv("MYSQL_INTEGRATION_DSN")
-	if dsn == "" {
-		t.Skip("MYSQL_INTEGRATION_DSN is not set")
-	}
-
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{TranslateError: true})
-	if err != nil {
-		t.Fatalf("open MySQL: %v", err)
-	}
+	db := testdb.Open(t)
 	if err := db.AutoMigrate(&taskmodel.CrawlTask{}); err != nil {
 		t.Fatalf("migrate crawl tasks: %v", err)
 	}

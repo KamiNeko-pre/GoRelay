@@ -50,3 +50,21 @@ type CrawlResult struct {
 	Payload   string    `json:"payload" gorm:"type:json;not null"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// Renewal preserves the same execution token; only a live owner may extend it.
+func RenewCrawlTaskLease(ctx context.Context, id uint64, token string, lease time.Duration, runID string) error {
+	now := time.Now()
+	query := DB.WithContext(ctx).Model(&taskmodel.CrawlTask{}).
+		Where("id = ? AND status = ? AND run_token = ? AND lease_until > ?", id, taskmodel.StatusRunning, token, now)
+	if runID != "" {
+		query = query.Where("EXISTS (SELECT 1 FROM agent_runs WHERE agent_runs.id = ? AND cancelled = ? AND status NOT IN ? AND (deadline IS NULL OR deadline > ?))", runID, false, []string{"completed", "partial", "failed", "cancelled", "expired"}, now)
+	}
+	result := query.Update("lease_until", now.Add(lease))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrTaskTransitionConflict
+	}
+	return nil
+}

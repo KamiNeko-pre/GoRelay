@@ -21,4 +21,4 @@ for index, id in ipairs(ids or {}) do
     end
 end
 if #items == 0 then return false, "Hacker News story rows were not found" end
-return true, {items = items, meta = {source = "Hacker News", scope = "front page", url = TARGET_URL, rule_version = "3"}}
+return true, {items = items, meta = {source = "Hacker News", scope = "front page", url = TARGET_URL, rule_version = "4"}}

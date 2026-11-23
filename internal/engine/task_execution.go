@@ -7,43 +7,59 @@ import (
 	"os"
 	"time"
 
+	"go-lua-crawler/internal/agentdata"
 	"go-lua-crawler/internal/config"
 	"go-lua-crawler/internal/repository"
 	taskmodel "go-lua-crawler/internal/task"
 	"gorm.io/gorm"
 )
 
-// ExecuteTask reuses the existing VM/parser but defers persistence to completion.
-// The Channel entrypoint keeps its original persistence behavior.
+// ExecuteTask loads the target rule, owns one Lua VM for the task, and returns
+// the result persistence callback for the Worker to commit with the terminal state.
 func ExecuteTask(ctx context.Context, task taskmodel.CrawlTask) (repository.PersistTaskResult, error) {
-	ScriptMutex.RLock()
-	script := ScriptCache
-	ScriptMutex.RUnlock()
-	// Configured targets select a trusted local rule; legacy callers keep the cache.
-	if rules, loadErr := repository.ListRuleDefinitions(); loadErr == nil {
-		for _, rule := range rules {
-			if rule.ID == task.Target && rule.Script != "" {
-				content, readErr := os.ReadFile(rule.Script)
-				if readErr != nil {
-					return nil, fmt.Errorf("load rule %s: %w", task.Target, readErr)
-				}
-				script = string(content)
-				break
-			}
+	if task.RuleHash != "" {
+		artifact, err := agentdata.NewStore(repository.DB).Artifact(ctx, task.RuleHash)
+		if err != nil {
+			return nil, fmt.Errorf("load frozen rule: %w", err)
 		}
+		if artifact.Kind != "trusted_legacy" {
+			return nil, fmt.Errorf("generated code cannot enter trusted legacy VM")
+		}
+		result, err := executeLuaScriptContext(ctx, artifact.Code, task.URL, time.Duration(config.Get().Engine.LuaTimeout)*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		payload, err := json.Marshal(result)
+		if err != nil {
+			return nil, err
+		}
+		return func(tx *gorm.DB) error {
+			return tx.Create(&repository.CrawlResult{TaskID: task.ID, Payload: string(payload)}).Error
+		}, nil
 	}
-	if script == "" {
-		return nil, fmt.Errorf("no Lua rule loaded")
-	}
-	result, err := executeLuaScriptContext(ctx, script, task.URL, time.Duration(config.Get().Engine.LuaTimeout)*time.Second)
+	rules, err := repository.ListRuleDefinitions()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load rule definitions: %w", err)
 	}
-	payload, err := json.Marshal(result)
-	if err != nil {
-		return nil, err
+	for _, rule := range rules {
+		if rule.ID != task.Target {
+			continue
+		}
+		content, err := os.ReadFile(rule.Script)
+		if err != nil {
+			return nil, fmt.Errorf("load rule %s: %w", task.Target, err)
+		}
+		result, err := executeLuaScriptContext(ctx, string(content), task.URL, time.Duration(config.Get().Engine.LuaTimeout)*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		payload, err := json.Marshal(result)
+		if err != nil {
+			return nil, err
+		}
+		return func(tx *gorm.DB) error {
+			return tx.Create(&repository.CrawlResult{TaskID: task.ID, Payload: string(payload)}).Error
+		}, nil
 	}
-	return func(tx *gorm.DB) error {
-		return tx.Create(&repository.CrawlResult{TaskID: task.ID, Payload: string(payload)}).Error
-	}, nil
+	return nil, fmt.Errorf("no rule configured for target %q", task.Target)
 }

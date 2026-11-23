@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>引用原文 · GoRelay</title>
+  <link rel="stylesheet" href="/assets/agent.css?v=20261021">
+  <link rel="stylesheet" href="/assets/evidence.css">
+</head>
+<body>
+  <header class="evidence-header"><a class="brand" href="/agent">GoRelay</a><span>引用原文</span></header>
+  <main class="evidence-page">
+    <p id="notice" class="evidence-notice" role="status" aria-live="polite">正在读取保存的原文…</p>
+    <form id="access-form" class="evidence-access" hidden>
+      <h1>打开你的资料</h1>
+      <p>首次打开引用时，请输入 GoRelay 服务的访问令牌。它与模型 API Key 无关，也不会放进链接。</p>
+      <label for="access-token">服务访问令牌</label>
+      <input id="access-token" type="password" required autocomplete="off">
+      <button class="primary" type="submit">查看原文</button>
+    </form>
+    <article id="evidence" hidden>
+      <p class="evidence-kicker">回答所引用的资料快照</p>
+      <h1 id="title"></h1>
+      <div class="evidence-meta"><span id="captured"></span><span id="published"></span><a id="original" target="_blank" rel="noopener noreferrer">打开原始网页 ↗</a></div>
+      <p id="version-note" class="evidence-version"></p>
+	  <p id="evidence-origin" class="evidence-notice"></p>
+      <section class="evidence-passage" aria-labelledby="passage-heading"><h2 id="passage-heading">引用片段</h2><blockquote id="passage"></blockquote></section>
+      <details class="evidence-context"><summary>查看原文上下文</summary><p class="muted">高亮部分是回答引用的位置；这里保留采集当时的文本，网页后续变化不会替换这份快照。</p><div id="document" class="evidence-body"></div></details>
+      <details class="evidence-identity"><summary>资料版本与定位</summary><dl id="identity"></dl></details>
+    </article>
+  </main>
+  <script type="module" src="/assets/evidence_view.mjs"></script>
+</body>
+</html>

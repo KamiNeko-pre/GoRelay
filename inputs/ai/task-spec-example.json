@@ -1,0 +1,1 @@
+{"goal":"Compare public component release versions and licenses with source evidence","schema_version":"v1","entities":["A","B"],"entity_field":"name","required_fields":[{"name":"name","type":"string"},{"name":"version","type":"string"},{"name":"license","type":"string"}],"join_keys":["name"],"max_age_seconds":86400}

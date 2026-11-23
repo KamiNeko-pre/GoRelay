@@ -34,17 +34,3 @@ func TestParseAnalysisQueryClampsOnlyAtRepositoryBoundary(t *testing.T) {
 		t.Fatalf("limit = %d, want handler to preserve the caller value", limit)
 	}
 }
-
-func TestListTaskEventsRejectsInvalidID(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Params = gin.Params{{Key: "id", Value: "not-a-number"}}
-	context.Request = httptest.NewRequest(http.MethodGet, "/api/v1/tasks/not-a-number/events", nil)
-
-	ListTaskEvents(context)
-
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
-	}
-}

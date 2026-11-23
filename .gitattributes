@@ -1,0 +1,2 @@
+# Preserve captured response bytes used by offline replay fixtures.
+/internal/**/testdata/** -text

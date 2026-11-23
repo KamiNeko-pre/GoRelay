@@ -1,0 +1,4 @@
+{
+  "title_selector": ".Article[data-slug] h1:not(.small)",
+  "body_selector": ".Article[data-slug]"
+}

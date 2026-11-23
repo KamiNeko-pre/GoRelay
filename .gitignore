@@ -34,6 +34,8 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+__pycache__/
+*.pyc
 
 # Agent workspaces and private local tooling
 /.agents/
@@ -47,8 +49,16 @@ Thumbs.db
 /skills-lock.json
 
 # Private plans, raw benchmark captures and local verification artifacts
-/docs/
-/deploy/
+/docs/*
+/deploy/*
+!/deploy/.env.example
+!/deploy/Caddyfile
+!/deploy/README.md
+!/deploy/compose.yml
+!/deploy/backup.sh
+!/deploy/restore.sh
+!/deploy/config_test.go
+/inputs/agent-eval/*private*.json
 /output/
 /tmp/
 /temp/
@@ -64,3 +74,15 @@ Thumbs.db
 /docker-compose.final.yml
 /web/README.md
 /web/verify-live.cjs
+
+/experiments/
+
+/scripts/experiments/
+
+/inputs/experiments/
+
+# Saved Agent executions and task planning remain private.
+/internal/aiapp/testdata/*.json
+/internal/aiapp/testdata/*.jsonl
+/internal/aiapp/testdata/private/
+/configs/agentbench/*.candidate.json

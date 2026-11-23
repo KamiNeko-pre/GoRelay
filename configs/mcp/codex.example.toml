@@ -1,0 +1,3 @@
+[mcp_servers.gorelay]
+url = "http://127.0.0.1:18109/mcp"
+bearer_token_env_var = "GORELAY_ADMIN_TOKEN"

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="330" viewBox="0 0 1200 330" role="img" aria-labelledby="title desc">
+<title id="title">GoRelay — 让 Agent 构建工具，让代码持续执行</title>
+<desc id="desc">Go 与 Lua 驱动的 Agent 系统：从任务目标，构建可复用工具，再交付数据与知识。</desc>
+<rect width="1200" height="330" rx="16" fill="#11252c"/>
+<path d="M64 56h20v20H64zM91 56h20v20H91z" fill="none" stroke="#7ce0be" stroke-width="3"/>
+<path d="M79 66h16" stroke="#7ce0be" stroke-width="3"/>
+<text x="128" y="72" fill="#b5cbc9" font-family="Segoe UI,Arial,sans-serif" font-size="17">AGENT ENGINEERING · GO + LUA</text>
+<text x="60" y="151" fill="#f5fbf9" font-family="Segoe UI,Arial,sans-serif" font-size="66" font-weight="700" letter-spacing="-2">GoRelay</text>
+<text x="64" y="205" fill="#f5fbf9" font-family="Segoe UI,Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="28" font-weight="600">让 Agent 构建工具，让代码持续执行。</text>
+<text x="64" y="245" fill="#b5cbc9" font-family="Segoe UI,Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="18">动态能力构建 · 执行反馈纠错 · 知识检索</text>
+<path d="M64 283h645" stroke="#355058"/>
+<text x="64" y="307" fill="#91b3b4" font-family="Segoe UI,Arial,sans-serif" font-size="13">AGENT LOOP</text>
+<text x="213" y="307" fill="#91b3b4" font-family="Segoe UI,Arial,sans-serif" font-size="13">CODE AS ACTION</text>
+<text x="396" y="307" fill="#91b3b4" font-family="Segoe UI,Arial,sans-serif" font-size="13">TOOL CALLING</text>
+<text x="555" y="307" fill="#91b3b4" font-family="Segoe UI,Arial,sans-serif" font-size="13">RAG</text>
+<path d="M790 46v238" stroke="#355058"/>
+<g font-family="Segoe UI,Microsoft YaHei,Noto Sans CJK SC,sans-serif">
+<rect x="845" y="52" width="289" height="58" rx="8" fill="#1d3740"/>
+<circle cx="873" cy="81" r="5" fill="#7ce0be"/>
+<text x="891" y="88" fill="#e9f4ef" font-size="19" font-weight="600">任务目标</text><text x="1075" y="87" fill="#a4bfbe" font-size="13">PLAN</text>
+<path d="M989 116v17m-4-4 4 4 4-4" fill="none" stroke="#668c8e" stroke-width="2"/>
+<rect x="845" y="140" width="289" height="58" rx="8" fill="#7ce0be"/>
+<circle cx="873" cy="169" r="5" fill="#143d36"/>
+<text x="891" y="176" fill="#143d36" font-size="19" font-weight="600">可复用工具</text><text x="1081" y="175" fill="#225c4b" font-size="13">RUN</text>
+<path d="M989 204v17m-4-4 4 4 4-4" fill="none" stroke="#668c8e" stroke-width="2"/>
+<rect x="845" y="228" width="289" height="58" rx="8" fill="#1d3740"/>
+<circle cx="873" cy="257" r="5" fill="#7ce0be"/>
+<text x="891" y="264" fill="#e9f4ef" font-size="19" font-weight="600">数据与知识</text><text x="1061" y="263" fill="#a4bfbe" font-size="13">RECALL</text>
+</g></svg>

@@ -22,7 +22,7 @@ type Processor struct {
 }
 
 // NewProcessor only stores validated dependencies; it does not process messages.
-func NewProcessor(client *redis.Client, cfg Config) (*Processor, error) {
+func NewProcessor(client *redis.Client, cfg Config, executors ...func(context.Context, taskmodel.CrawlTask) (repository.PersistTaskResult, error)) (*Processor, error) {
 	if client == nil {
 		return nil, fmt.Errorf("Redis client is required")
 	}
@@ -32,7 +32,11 @@ func NewProcessor(client *redis.Client, cfg Config) (*Processor, error) {
 	if cfg.ExecutionTimeout <= 0 {
 		cfg.ExecutionTimeout = 30 * time.Second
 	}
-	return &Processor{client: client, config: cfg, gate: make(chan struct{}, 1), execute: engine.ExecuteTask}, nil
+	execute := engine.ExecuteTask
+	if len(executors) > 0 && executors[0] != nil {
+		execute = executors[0]
+	}
+	return &Processor{client: client, config: cfg, gate: make(chan struct{}, 1), execute: execute}, nil
 }
 
 // ProcessNewMessage handles a message read with the special ">" stream ID.
@@ -64,8 +68,16 @@ func (processor *Processor) process(ctx context.Context, message redis.XMessage,
 	// Reserve ten seconds for completion inside the lease. Acquisition time
 	// consumes this absolute budget instead of granting a fresh lease afterward.
 	executionDeadline := time.Now().Add(processor.config.ExecutionTimeout + 5*time.Second)
+	leaseDuration := processor.config.ExecutionTimeout + 15*time.Second
+	if crawlTask.ProgramHash != "" {
+		executionDeadline = time.Time{}
+		leaseDuration = processor.config.ClaimMinIdle
+		if crawlTask.ExecutionDeadline != nil {
+			executionDeadline = *crawlTask.ExecutionDeadline
+		}
+	}
 	claimCtx, stopClaim := context.WithTimeout(ctx, 5*time.Second)
-	token, err := repository.ClaimCrawlTask(claimCtx, crawlTask, processor.config.ExecutionTimeout+15*time.Second, reclaim)
+	token, err := repository.ClaimCrawlTask(claimCtx, crawlTask, leaseDuration, reclaim)
 	stopClaim()
 	if errors.Is(err, repository.ErrTaskTransitionConflict) {
 		// Another attempt owns the task. Keep this message pending; recovery
@@ -76,12 +88,27 @@ func (processor *Processor) process(ctx context.Context, message redis.XMessage,
 		return fmt.Errorf("claim task %d: %w", crawlTask.ID, err)
 	}
 	processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageClaimed, taskmodel.EventLevelInfo, "获取任务", "Worker 已获取任务租约")
-	execCtx, cancel := context.WithDeadline(ctx, executionDeadline)
-	if err := execCtx.Err(); err != nil {
-		cancel()
-		return err
+	execCtx, cancel := context.WithCancel(ctx)
+	if !executionDeadline.IsZero() {
+		var deadlineCancel context.CancelFunc
+		execCtx, deadlineCancel = context.WithDeadline(execCtx, executionDeadline)
+		defer deadlineCancel()
 	}
-	persist, executionErr := processor.runExecution(execCtx, crawlTask)
+	var stopRenew func() error
+	if crawlTask.ProgramHash != "" {
+		stopRenew = processor.renewExecution(execCtx, cancel, crawlTask.ID, token, leaseDuration, crawlTask.RunID)
+	}
+	var persist repository.PersistTaskResult
+	executionErr := execCtx.Err()
+	if executionErr == nil {
+		persist, executionErr = processor.runExecution(execCtx, crawlTask)
+	}
+	if stopRenew != nil {
+		if err := stopRenew(); err != nil {
+			cancel()
+			return err
+		}
+	}
 	cancel()
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -145,4 +172,33 @@ func (processor *Processor) ack(ctx context.Context, messageID string) error {
 // ProcessClaimedMessage handles an idle PEL message obtained by XAUTOCLAIM.
 func (processor *Processor) ProcessClaimedMessage(ctx context.Context, message redis.XMessage) error {
 	return processor.process(ctx, message, true)
+}
+
+func (processor *Processor) renewExecution(ctx context.Context, cancel context.CancelFunc, taskID uint64, token string, lease time.Duration, runID string) func() error {
+	stop := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(max(time.Millisecond, lease/3))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				done <- nil
+				return
+			case <-ctx.Done():
+				done <- nil
+				return
+			case <-ticker.C:
+				renewCtx, release := context.WithTimeout(ctx, min(5*time.Second, lease/3))
+				err := repository.RenewCrawlTaskLease(renewCtx, taskID, token, lease, runID)
+				release()
+				if err != nil {
+					cancel()
+					done <- fmt.Errorf("renew task %d ownership: %w", taskID, err)
+					return
+				}
+			}
+		}
+	}()
+	return func() error { close(stop); return <-done }
 }

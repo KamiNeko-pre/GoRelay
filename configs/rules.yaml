@@ -33,3 +33,67 @@ rules:
       group: domain
       group_label: 发布站点
       description: author
+  - id: nowcoder_jobs
+    name: 牛客 Go 岗位
+    script: scripts/jobs/nowcoder.lua
+    url: https://www.nowcoder.com/jobs/intern/center
+    source: 牛客网
+    schedule: 12h
+    min_items: 0
+    item_key: source_job_id
+    display:
+      title: title
+      url: job_url
+      score: salary_text
+      score_label: 薪资
+      group: company
+      group_label: 公司
+      description: description
+  - id: lever_jobs
+    name: Lever 招聘板
+    script: scripts/jobs/lever.lua
+    url: https://api.lever.co/v0/postings/palantir?mode=json&limit=20
+    source: Lever ATS
+    schedule: 12h
+    min_items: 0
+    item_key: source_job_id
+    display:
+      title: title
+      url: job_url
+      score: location_raw
+      score_label: 地点
+      group: company_name
+      group_label: 公司
+      description: description
+  - id: greenhouse_jobs
+    name: Greenhouse 招聘板
+    script: scripts/jobs/greenhouse.lua
+    url: https://job-boards.greenhouse.io/embed/job_board?for=airtable
+    source: Greenhouse ATS
+    schedule: 12h
+    min_items: 0
+    item_key: source_job_id
+    display:
+      title: title
+      url: job_url
+      score: location_raw
+      score_label: 地点
+      group: company_name
+      group_label: 公司
+      description: description
+  - id: ashby_jobs
+    name: Ashby 招聘板
+    script: scripts/jobs/ashby.lua
+    url: https://api.ashbyhq.com/posting-api/job-board/ashby?includeCompensation=true
+    source: Ashby ATS
+    schedule: 12h
+    min_items: 0
+    item_key: source_job_id
+    display:
+      title: title
+      url: job_url
+      score: location_raw
+      score_label: 地点
+      group: company_name
+      group_label: 公司
+      description: description
