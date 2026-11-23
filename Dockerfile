@@ -25,7 +25,6 @@ COPY --from=builder /out/worker /app/worker
 COPY --from=builder /out/mcp-check /app/mcp-check
 COPY --from=builder /out/bench-mcp /app/bench-mcp
 COPY configs /app/configs
-COPY scripts /app/scripts
 COPY web /app/web
 
 RUN mkdir -p /app/data/snapshots && chown -R gorelay:gorelay /app

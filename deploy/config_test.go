@@ -7,7 +7,7 @@ import (
 )
 
 func TestDeploymentConfigsAreCleanV2(t *testing.T) {
-	forbidden := []string{"qdrant", "information-worker", "cmd/indexer", "GORELAY_AI_API_KEY", "GORELAY_EMBED_"}
+	forbidden := []string{"qdrant", "information-worker", "cmd/indexer", "GORELAY_AI_API_KEY", "GORELAY_EMBED_", "LUA_SPIDER_", "COPY scripts"}
 	for _, file := range []string{"compose.yml", ".env.example", "../docker-compose.yml", "../.env.example", "../Dockerfile"} {
 		raw, err := os.ReadFile(file)
 		if err != nil {

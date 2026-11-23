@@ -167,3 +167,34 @@ func TestSafeClientRejectsBinaryContentOversizedAuthMismatchAndChallenge(t *test
 		t.Fatalf("expected renderer challenge block, got %v", err)
 	}
 }
+
+func TestLoadAuthProfilesFromJSONAndPerRequestAllowedDomains(t *testing.T) {
+	arrProfiles, err := LoadAuthProfilesFromJSON(`[{"name":"gh","allowed_domains":["api.github.com"],"header_name":"Authorization","header_prefix":"Bearer ","env_var":"GH_TOKEN"}]`)
+	if err != nil || arrProfiles["gh"].HeaderName != "Authorization" {
+		t.Fatalf("array parse failed: %+v err=%v", arrProfiles, err)
+	}
+	mapProfiles, err := LoadAuthProfilesFromJSON(`{"gh":{"allowed_domains":["api.github.com"],"header_name":"X-Api-Key","env_var":"GH_TOKEN"}}`)
+	if err != nil || mapProfiles["gh"].Name != "gh" || mapProfiles["gh"].HeaderName != "X-Api-Key" {
+		t.Fatalf("object parse failed: %+v err=%v", mapProfiles, err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.RespectRobots = false
+	cfg.RequestsPerSec = 100
+	cfg.Burst = 100
+	cfg.RequesterFactory = func(acquisition.Policy) (Requester, error) {
+		return &stubRequester{fn: func(_ context.Context, opts acquisition.RequestOptions) (acquisition.Response, error) {
+			return acquisition.Response{Body: `{"ok":true}`, Receipt: acquisition.Receipt{URL: opts.URL, Status: 200, Headers: map[string]string{"content-type": "application/json"}}}, nil
+		}}, nil
+	}
+	client, err := NewSafeClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Fetch(context.Background(), FetchRequest{URL: "https://other.example.com/a", AllowedDomains: []string{"allowed.example.com"}}); err == nil || err.(*GovernanceError).Code != ErrCodeSSRFBlocked {
+		t.Fatalf("expected SSRF_BLOCKED for host outside allowed_domains, got %v", err)
+	}
+	if _, err := client.Fetch(context.Background(), FetchRequest{URL: "https://sub.allowed.example.com/a", AllowedDomains: []string{"allowed.example.com"}}); err != nil {
+		t.Fatalf("expected subdomain within allowed_domains to succeed, got %v", err)
+	}
+}

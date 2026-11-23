@@ -65,7 +65,7 @@ var (
 )
 
 func InitConfig() {
-	viper.SetEnvPrefix("LUA_SPIDER")
+	viper.SetEnvPrefix("GORELAY")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 	bindEnvironment()
@@ -78,7 +78,7 @@ func InitConfig() {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath("./configs")
-	if path := os.Getenv("LUA_SPIDER_CONFIG"); path != "" {
+	if path := os.Getenv("GORELAY_CONFIG"); path != "" {
 		viper.SetConfigFile(path)
 	}
 	if err := viper.ReadInConfig(); err != nil {

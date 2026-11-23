@@ -69,8 +69,10 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("ensure Redis consumer group: %w", err)
 	}
 
-	govCfg := fetchgov.DefaultConfig()
-	govCfg.RespectRobots = !strings.EqualFold(os.Getenv("GORELAY_RESPECT_ROBOTS"), "false")
+	govCfg, err := fetchgov.ConfigFromEnv()
+	if err != nil {
+		return fmt.Errorf("load SafeClient config: %w", err)
+	}
 	safeClient, err := fetchgov.NewSafeClient(govCfg)
 	if err != nil {
 		return fmt.Errorf("init SafeClient: %w", err)

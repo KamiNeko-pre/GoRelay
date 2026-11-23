@@ -74,9 +74,6 @@ func CreateQueuedCrawlTaskWithOutboxOn(
 	crawlTask.QueuedAt = &queuedAt
 	return db.WithContext(ctx).Transaction(
 		func(tx *gorm.DB) error {
-			if err := snapshotKnownRule(ctx, tx, crawlTask); err != nil {
-				return fmt.Errorf("snapshot accepted rule: %w", err)
-			}
 			if err := tx.Create(crawlTask).Error; err != nil {
 				return fmt.Errorf("create queued crawl task: %w", err)
 			}

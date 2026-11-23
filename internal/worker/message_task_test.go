@@ -64,7 +64,7 @@ func TestLoadCrawlTaskFromMessageIntegration(t *testing.T) {
 	previous := repository.DB
 	repository.DB = db
 	t.Cleanup(func() { repository.DB = previous })
-	task := taskmodel.CrawlTask{RequestKey: fmt.Sprintf("message-task-test-%d", time.Now().UnixNano()), Target: "test", URL: "https://example.com/item", Status: taskmodel.StatusQueued}
+	task := taskmodel.CrawlTask{RequestKey: fmt.Sprintf("message-task-test-%d", time.Now().UnixNano()), SourceID: "test", URL: "https://example.com/item", Status: taskmodel.StatusQueued}
 	if err := db.Create(&task).Error; err != nil {
 		t.Fatal(err)
 	}

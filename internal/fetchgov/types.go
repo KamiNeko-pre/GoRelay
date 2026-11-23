@@ -72,10 +72,11 @@ type PageRenderer interface {
 }
 
 type RenderRequest struct {
-	URL          string            `json:"url"`
-	WaitSelector string            `json:"wait_selector,omitempty"`
-	WaitMS       int               `json:"wait_ms,omitempty"`
-	Headers      map[string]string `json:"headers,omitempty"`
+	URL            string            `json:"url"`
+	WaitSelector   string            `json:"wait_selector,omitempty"`
+	WaitMS         int               `json:"wait_ms,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	AllowedDomains []string          `json:"allowed_domains,omitempty"`
 }
 
 type RenderResult struct {

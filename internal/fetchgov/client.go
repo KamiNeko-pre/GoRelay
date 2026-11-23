@@ -44,6 +44,69 @@ func DefaultConfig() Config {
 	}
 }
 
+// LoadAuthProfilesFromJSON parses GORELAY_AUTH_PROFILES_JSON as either a JSON
+// array of AuthProfile objects or a name-keyed JSON map.
+func LoadAuthProfilesFromJSON(raw string) (map[string]AuthProfile, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	profiles := make(map[string]AuthProfile)
+	if strings.HasPrefix(raw, "[") {
+		var list []AuthProfile
+		if err := json.Unmarshal([]byte(raw), &list); err != nil {
+			return nil, fmt.Errorf("parse GORELAY_AUTH_PROFILES_JSON array: %w", err)
+		}
+		for _, p := range list {
+			name := strings.TrimSpace(p.Name)
+			if name == "" {
+				continue
+			}
+			p.Name = name
+			profiles[name] = p
+		}
+		return profiles, nil
+	}
+	var mapped map[string]AuthProfile
+	if err := json.Unmarshal([]byte(raw), &mapped); err != nil {
+		return nil, fmt.Errorf("parse GORELAY_AUTH_PROFILES_JSON object: %w", err)
+	}
+	for k, p := range mapped {
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			name = strings.TrimSpace(k)
+		}
+		if name == "" {
+			continue
+		}
+		p.Name = name
+		profiles[name] = p
+	}
+	return profiles, nil
+}
+
+// ConfigFromEnv builds a SafeClient Config from standard GORELAY_* environment
+// variables so server, worker, and lua-runner enforce identical governance.
+func ConfigFromEnv() (Config, error) {
+	cfg := DefaultConfig()
+	cfg.RespectRobots = !strings.EqualFold(strings.TrimSpace(os.Getenv("GORELAY_RESPECT_ROBOTS")), "false")
+	if rawProfiles := strings.TrimSpace(os.Getenv("GORELAY_AUTH_PROFILES_JSON")); rawProfiles != "" {
+		profiles, err := LoadAuthProfilesFromJSON(rawProfiles)
+		if err != nil {
+			return cfg, err
+		}
+		cfg.AuthProfiles = profiles
+	}
+	if sidecarURL := strings.TrimSpace(os.Getenv("GORELAY_BROWSER_CDP_URL")); sidecarURL != "" {
+		renderer, err := NewHTTPPageRenderer(sidecarURL, os.Getenv("GORELAY_BROWSER_CDP_TOKEN"), 2)
+		if err != nil {
+			return cfg, fmt.Errorf("init browser sidecar renderer: %w", err)
+		}
+		cfg.Renderer = renderer
+	}
+	return cfg, nil
+}
+
 // SafeClient enforces shared SSRF, robots.txt, rate-limit, circuit-breaker,
 // content-type, payload-size, and AuthProfile rules across all acquisition modes.
 type SafeClient struct {
@@ -116,6 +179,9 @@ func (c *SafeClient) Fetch(ctx context.Context, req FetchRequest) (acquisition.R
 		return acquisition.Response{}, &GovernanceError{Code: ErrCodeSSRFBlocked, Message: "invalid HTTP(S) target URL", Err: err}
 	}
 	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	if err := checkAllowedDomains(host, req.AllowedDomains); err != nil {
+		return acquisition.Response{}, err
+	}
 
 	opts := acquisition.RequestOptions{
 		Method:  req.Method,
@@ -192,6 +258,9 @@ func (c *SafeClient) Render(ctx context.Context, req RenderRequest) (RenderResul
 		return RenderResult{}, &GovernanceError{Code: ErrCodeSSRFBlocked, Message: "invalid HTTP(S) target URL", Err: err}
 	}
 	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	if err := checkAllowedDomains(host, req.AllowedDomains); err != nil {
+		return RenderResult{}, err
+	}
 	if c.cfg.RespectRobots {
 		if _, err := c.robots.Check(ctx, c.requester, parsed); err != nil {
 			return RenderResult{}, err
@@ -334,6 +403,26 @@ func (r *HTTPPageRenderer) RenderAndSniff(ctx context.Context, in RenderRequest)
 func isGovernanceBlock(err error) bool {
 	var ge *GovernanceError
 	return errors.As(err, &ge)
+}
+
+func checkAllowedDomains(host string, allowed []string) error {
+	if len(allowed) == 0 {
+		return nil
+	}
+	for _, d := range allowed {
+		ld := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d), "."))
+		if ld == "" {
+			continue
+		}
+		if host == ld || strings.HasSuffix(host, "."+ld) {
+			return nil
+		}
+	}
+	return &GovernanceError{
+		Code:    ErrCodeSSRFBlocked,
+		Message: fmt.Sprintf("host %q is outside granted allowed_domains", host),
+		Host:    host,
+	}
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

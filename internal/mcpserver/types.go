@@ -1,8 +1,6 @@
 package mcpserver
 
 import (
-	"encoding/json"
-
 	"gorelay/internal/connector"
 	"gorelay/internal/pipeline"
 	"gorelay/internal/probe"
@@ -47,18 +45,18 @@ type ProbeSourceInput struct {
 type ProbeSourceOutput = probe.ProbeResult
 
 type DeployAndRunInput struct {
-	SourceID     string          `json:"source_id" jsonschema:"Stable semantic connector ID, e.g. github_go_releases."`
-	Kind         string          `json:"kind,omitempty" jsonschema:"data (default) or discovery (recursive URL discovery subtasks)."`
-	Executor     string          `json:"executor" jsonschema:"http_api (declarative JSON API without Lua) or lua_sandbox (gopher-lua script)."`
-	Description  string          `json:"description,omitempty" jsonschema:"Concise description of what this connector retrieves and outputs."`
-	TargetURL    string          `json:"target_url,omitempty" jsonschema:"Target public URL (optional for http_api if url_template includes host)."`
-	SpecOrCode   string          `json:"spec_or_code" jsonschema:"JSON APISpec string for executor=http_api, or complete Lua program for executor=lua_sandbox."`
-	InputSchema  json.RawMessage `json:"input_schema,omitempty" jsonschema:"Optional JSON object schema for params; inferred from params when omitted."`
-	OutputSchema json.RawMessage `json:"output_schema" jsonschema:"Output schema JSON: {fields:[{name,type,required}], entity_keys:[...], min_rows}."`
-	Params       map[string]any  `json:"params,omitempty" jsonschema:"Runtime parameters passed to URL template placeholders or Lua PARAMS."`
-	AuthProfile  string          `json:"auth_profile,omitempty" jsonschema:"Optional auth_profile name for authorized endpoints."`
-	WaitMS       int             `json:"wait_ms,omitempty" jsonschema:"Milliseconds to wait for synchronous fast-path completion (e.g. 3000) before returning job_id."`
-	RollbackTo   int             `json:"rollback_to,omitempty" jsonschema:"Optional previous version integer to restore active pointer immediately instead of deploying new code."`
+	SourceID     string         `json:"source_id" jsonschema:"Stable semantic connector ID, e.g. github_go_releases."`
+	Kind         string         `json:"kind,omitempty" jsonschema:"data (default) or discovery (recursive URL discovery subtasks)."`
+	Executor     string         `json:"executor,omitempty" jsonschema:"http_api (declarative JSON API without Lua) or lua_sandbox (gopher-lua script). Required unless rollback_to is set."`
+	Description  string         `json:"description,omitempty" jsonschema:"Concise description of what this connector retrieves and outputs."`
+	TargetURL    string         `json:"target_url,omitempty" jsonschema:"Target public URL (optional for http_api if url_template includes host)."`
+	SpecOrCode   string         `json:"spec_or_code,omitempty" jsonschema:"JSON APISpec string for executor=http_api, or complete Lua program for executor=lua_sandbox. Required unless rollback_to is set."`
+	InputSchema  map[string]any `json:"input_schema,omitempty" jsonschema:"Optional JSON object schema for params; inferred from params when omitted."`
+	OutputSchema map[string]any `json:"output_schema,omitempty" jsonschema:"Output schema JSON object: {fields:[{name,type,required}], entity_keys:[...], min_rows}. Required unless rollback_to is set."`
+	Params       map[string]any `json:"params,omitempty" jsonschema:"Runtime parameters passed to URL template placeholders or Lua PARAMS."`
+	AuthProfile  string         `json:"auth_profile,omitempty" jsonschema:"Optional auth_profile name for authorized endpoints."`
+	WaitMS       int            `json:"wait_ms,omitempty" jsonschema:"Milliseconds to wait for synchronous fast-path completion (e.g. 3000) before returning job_id."`
+	RollbackTo   int            `json:"rollback_to,omitempty" jsonschema:"Optional previous version integer to restore active pointer immediately instead of deploying new code."`
 }
 
 type RunConnectorInput struct {

@@ -41,6 +41,8 @@ type ProgramResult struct {
 	Requests              []acquisition.Receipt           `json:"requests"`
 	NetworkAPIs           []acquisition.NetworkAPICapture `json:"network_apis,omitempty"`
 	SourceEvidence        []acquisition.Response          `json:"source_evidence,omitempty"` // Trusted fetch output, never Lua-created proof.
+	CheckpointedItems     []map[string]any                `json:"checkpointed_items,omitempty"`
+	FinalCheckpoint       any                             `json:"final_checkpoint,omitempty"`
 	Stats                 acquisition.Stats               `json:"stats"`                     // logical calls/body bytes; network redirects are additionally tracked by PublicFetcher.
 	DurationMS            int64                           `json:"duration_ms"`
 }
@@ -50,10 +52,22 @@ type ProgramResult struct {
 // can inspect status codes and headers directly.
 type RequestFunc func(context.Context, acquisition.RequestOptions) (acquisition.Response, error)
 
+// RenderFunc renders a dynamic page via an optional external browser sidecar
+// and returns the rendered HTML wrapped in a standard acquisition.Response.
+type RenderFunc func(ctx context.Context, targetURL, waitSelector string) (acquisition.Response, error)
+
 // CheckpointHooks connects Lua sandbox checkpoint.get/save primitives to durable storage.
 type CheckpointHooks struct {
 	Get  func(ctx context.Context) (any, error)
 	Save func(ctx context.Context, cursor any, records []map[string]any, evidence []acquisition.Response) error
+}
+
+// ExecutionHooks bundles all host-owned network, render, and checkpoint adapters
+// passed into a sandboxed Lua execution.
+type ExecutionHooks struct {
+	Request    RequestFunc
+	Render     RenderFunc
+	Checkpoint *CheckpointHooks
 }
 
 // RunProgram is the generated-code entry point. Production executes it in the
@@ -74,6 +88,13 @@ func RunProgramWithRequester(parent context.Context, in ProgramRequest, limits P
 }
 
 func RunProgramWithHooks(parent context.Context, in ProgramRequest, limits ProgramLimits, request RequestFunc, cp *CheckpointHooks) (result ProgramResult, err error) {
+	return RunProgramWithExecutionHooks(parent, in, limits, ExecutionHooks{Request: request, Checkpoint: cp})
+}
+
+func RunProgramWithExecutionHooks(parent context.Context, in ProgramRequest, limits ProgramLimits, hooks ExecutionHooks) (result ProgramResult, err error) {
+	request := hooks.Request
+	render := hooks.Render
+	cp := hooks.Checkpoint
 	start := time.Now()
 	var requestFailure error
 	result.Requests = []acquisition.Receipt{}
@@ -290,10 +311,37 @@ func RunProgramWithHooks(parent context.Context, in ProgramRequest, limits Progr
 		L.Push(responseTable(response, sourceIndex, e))
 		return 1
 	}
+	luaHTTPRender := func(L *lua.LState) int {
+		targetURL := L.CheckString(1)
+		waitSelector := ""
+		if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
+			waitSelector = L.CheckString(2)
+		}
+		result.Stats.Requests++
+		if render == nil {
+			return pushLuaError(L, fmt.Errorf("RENDERER_UNAVAILABLE: external CDP sidecar renderer is not configured"))
+		}
+		response, e := render(ctx, targetURL, waitSelector)
+		result.Stats.Bytes += int64(len(response.Body))
+		if e != nil {
+			requestFailure = e
+			return pushLuaError(L, e)
+		}
+		if response.Receipt.URL != "" || response.Receipt.Status != 0 {
+			result.Requests = append(result.Requests, response.Receipt)
+			result.SourceEvidence = append(result.SourceEvidence, response)
+		}
+		if response.Body != "" {
+			dom.observeSource(response.Body)
+		}
+		L.Push(lua.LString(response.Body))
+		return 1
+	}
 	L.SetGlobal("http_get", L.NewFunction(installFetch(http.MethodGet)))
 	L.SetGlobal("http_get_referer", L.NewFunction(installFetch(http.MethodGet)))
 	L.SetGlobal("http_head", L.NewFunction(installFetch(http.MethodHead)))
 	L.SetGlobal("http_request", L.NewFunction(luaHTTPRequest))
+	L.SetGlobal("http_render", L.NewFunction(luaHTTPRender))
 
 	flushedEvidence := 0
 	var inMemoryCheckpoint any
@@ -386,6 +434,14 @@ func RunProgramWithHooks(parent context.Context, in ProgramRequest, limits Progr
 			if err := cp.Save(ctx, cursorVal, rows, batchEvidence); err != nil {
 				L.RaiseError("checkpoint.save failed: %v", err)
 				return 0
+			}
+		} else {
+			result.FinalCheckpoint = cursorVal
+			for _, row := range rows {
+				if limits.MaxItems > 0 && len(result.CheckpointedItems) >= limits.MaxItems {
+					break
+				}
+				result.CheckpointedItems = append(result.CheckpointedItems, row)
 			}
 		}
 		L.Push(lua.LBool(true))

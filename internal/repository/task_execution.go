@@ -44,15 +44,8 @@ func ClaimCrawlTask(ctx context.Context, task taskmodel.CrawlTask, lease time.Du
 	return token, nil
 }
 
-// The task ID primary key gives each accepted task one immutable result snapshot.
-type CrawlResult struct {
-	TaskID    uint64    `json:"task_id" gorm:"primaryKey;autoIncrement:false"`
-	Payload   string    `json:"payload" gorm:"type:json;not null"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
 // Renewal preserves the same execution token; only a live, uncancelled owner may extend it.
-func RenewCrawlTaskLease(ctx context.Context, id uint64, token string, lease time.Duration, _ string) error {
+func RenewCrawlTaskLease(ctx context.Context, id uint64, token string, lease time.Duration) error {
 	now := time.Now()
 	result := DB.WithContext(ctx).Model(&taskmodel.CrawlTask{}).
 		Where("id = ? AND status = ? AND run_token = ? AND cancelled = ? AND lease_until > ?", id, taskmodel.StatusRunning, token, false, now).

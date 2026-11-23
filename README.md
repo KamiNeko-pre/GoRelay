@@ -12,9 +12,9 @@ GoRelay 是一个基于 **Go + MySQL + Redis + gopher-lua** 构建的轻量级 *
 
 - **固定 6 个 MCP 工具，防止宿主上下文膨胀**：已沉淀的连接器存放在 MySQL 版本库中按域名/URL 确定性检索，绝不动态向宿主膨胀注册几十上百个工具。
 - **API 优先自动升级（`http_api` 免写代码）**：`gorelay_probe_source` 自动识别直连 JSON、HTML 内嵌 JSON（`__NEXT_DATA__` / JSON-LD）及可选 Sidecar XHR 接口并生成 `DraftAPISpec`；无需翻页解析时直接走声明式 `http_api` 执行器。
-- **`gopher-lua` 独立子进程沙箱 + 页级断点续跑**：多步关联与复杂解析代码在隔离的 `-child` 子进程中执行（OS 内存限额、SSRF 内网禁访、能力白名单、取消强杀进程树）；提供 `checkpoint.get()` / `checkpoint.save(cursor, batch)` 原语，在同一个 MySQL 事务中完成数据落盘与 `WHERE id=? AND run_token=?` CAS 游标推进，崩溃接管直接从断点页续跑。
-- **唯一统一可靠执行与并发合并**：单页、多页、`http_api`、`lua_sandbox`、`discovery` 全部统一走 `MySQL Outbox + Redis Streams + Lease + XAUTOCLAIM`；同参活跃任务跨会话 Singleflight 合并，`wait_ms` 窗口支持快任务 1 步同步直出。
-- **共享流量治理（SafeClient）与静默失效保护**：所有探测与执行共用 SSRF DNS Pinning、`robots.txt` + `Crawl-delay`、域名令牌桶限速、429/WAF/Captcha 熔断器与 `5 MiB` 响应上限。落库前经过 `CheckSilentDrift` 门禁：一旦上游返回伪 200 拦截页或缺失必填字段，立刻标 `degraded` 保护旧有效快照不被污染。
+- **`gopher-lua` 独立子进程沙箱 + 零直连宿主代理 IPC + 页级断点续跑**：多步关联与复杂解析代码在隔离的 `-child` 子进程中执行（OS 内存限额、能力白名单、无凭证环境变量、取消强杀进程树）；所有 `http_request`、`http_render` 与 `checkpoint.get/save` 经 stdin/stdout JSON-lines IPC 统一路由到常驻父进程 `lua-runner` 持有的单一共享 `SafeClient` 与 Worker 回调中心，确保限流/429 熔断器与 `AuthProfile` 跨执行持久化生效。
+- **唯一统一可靠执行、单次试跑晋升与并发合并**：`gorelay_deploy_and_run` 试跑校验通过后直接在同一事务内发布版本并落盘首页已验证数据（单页零二次请求；多页自动写入 `checkpoint_json` 并经 `MySQL Outbox + Redis Streams + Lease + XAUTOCLAIM` 由 Worker 从第 2 页续跑）；活跃同参任务跨会话 Singleflight 合并，`wait_ms` 窗口支持快任务 1 步同步直出。
+- **共享流量治理（SafeClient）与静默失效保护**：所有探测与执行共用 SSRF DNS Pinning、`robots.txt` + `Crawl-delay`、域名令牌桶限速、429/WAF/Captcha 熔断器、`5 MiB` 响应上限与可选外置 CDP Sidecar `http_render`。落库前经过 `CheckSilentDrift` 门禁：一旦上游返回伪 200 拦截页或缺失必填字段，数据事务回滚保护旧有效快照不被污染，并在独立事务中持久化 `DriftEvent` 与 `connectors.status = 'degraded'`。
 - **防膨胀存储与原文溯源**：结构化记录按 `(source_id, entity_key) + content_hash` 精确去重与版本更新；原始响应按 SHA-256 gzip 归档并提供纯 Go BM25 `gorelay_search_evidence` 检索与 `/evidence?ref=<sha256>` 原文对照；单次 MCP 返回硬封顶 `<= 16 KiB` 自动分页。
 
 ---
@@ -45,7 +45,7 @@ flowchart LR
 | :--- | :--- |
 | `gorelay_list_sources` | 基于 MySQL 对 `domain / url / keyword / kind (data \| discovery)` 做确定性查库，结合 `freshness_ttl_sec` 判断是否有可直接复用的新鲜结果 |
 | `gorelay_probe_source` | 过 `SafeClient` 预检并探测直连 JSON、内嵌 JSON、可选 Sidecar XHR API 或精简 DOM 选择器，附带 `< 350 Token` 沙箱契约 |
-| `gorelay_deploy_and_run` | 先同步试跑校验（失败不污染目录），通过后发布不可变 `v(N+1)`（或 `rollback_to` 回滚）并入队执行，`wait_ms` 内完成即同步吐出结果 |
+| `gorelay_deploy_and_run` | 先同步试跑校验（失败不污染目录），通过后在同一事务发布不可变 `v(N+1)` 并直接晋升首页试跑数据（0 重复抓首页；多页自动入队从第 2 页续跑，另支持 `rollback_to` 回滚） |
 | `gorelay_run_connector` | 1 步复用已发布连接器：支持新鲜缓存直出（0 外网请求）、多会话 Singleflight 合并、`wait_ms` 短等待与静默失效诊断 |
 | `gorelay_get_job_data` | 查询长任务状态、按 `next_cursor` 分页读取 `<= 16 KiB` 清洗结果，或取消任务并强杀沙箱子进程 |
 | `gorelay_search_evidence` | 在显式 `source_ids` 范围内用纯 Go BM25 检索归档长文本，或按 `snapshot_ref` 分页阅读 gzip 原文快照 |
@@ -94,4 +94,5 @@ curl -f http://127.0.0.1:8080/healthz
 
 - Web 控制台：`http://127.0.0.1:8080/`（连接器目录、复用命中率与 Drift 事件观测）
 - MCP 客户端接入校验：`GORELAY_ADMIN_TOKEN=... go run ./cmd/mcp-check -url http://127.0.0.1:8080/mcp`
+- 在线全链路评估：`GORELAY_ADMIN_TOKEN=... go run ./cmd/bench-mcp -mode live -mcp http://127.0.0.1:8080/mcp -target-url <public-json-api-url>`
 - Claude Code / Codex 客户端配置模板见 `configs/mcp/`。

@@ -1,5 +1,8 @@
-// lua-runner runs exactly one program per child process. The HTTP parent owns
-// admission/caps; it never evaluates generated Lua in its own heap.
+// lua-runner runs exactly one program per isolated OS child process.
+// The long-lived HTTP parent owns admission caps and ONE shared fetchgov.SafeClient
+// (persistent robots cache, per-domain rate limiter, 429/WAF circuit breaker,
+// scoped AuthProfiles, and optional CDP Sidecar renderer); untrusted child
+// processes never hold credentials or open outbound sockets directly.
 package main
 
 import (
@@ -17,6 +20,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -24,6 +28,7 @@ import (
 	"gorelay/internal/acquisition"
 	"gorelay/internal/contract"
 	"gorelay/internal/engine"
+	"gorelay/internal/fetchgov"
 	"gorelay/internal/programrunner"
 )
 
@@ -51,7 +56,7 @@ type childIsolation interface {
 func main() {
 	serve := flag.Bool("serve", false, "serve private /execute HTTP endpoint")
 	child := flag.Bool("child", false, "internal one-shot child mode")
-	snapshotPipe := flag.Bool("snapshot-pipe", false, "internal child snapshot channel")
+	snapshotPipe := flag.Bool("snapshot-pipe", false, "internal child host-IPC channel")
 	listen := flag.String("listen", ":8091", "private runner bind address")
 	flag.Parse()
 	limits, configErr := programrunner.ConfiguredLimits()
@@ -63,11 +68,24 @@ func main() {
 		if token == "" {
 			log.Fatal("GORELAY_RUNNER_TOKEN is required for HTTP mode")
 		}
+		govCfg, err := fetchgov.ConfigFromEnv()
+		if err != nil {
+			log.Fatalf("load SafeClient config: %v", err)
+		}
+		sharedClient, err := fetchgov.NewSafeClient(govCfg)
+		if err != nil {
+			log.Fatalf("initialize shared SafeClient: %v", err)
+		}
+		defer sharedClient.Close()
+
 		var writeTimeout time.Duration
 		if limits.Timeout > 0 {
 			writeTimeout = limits.Timeout + 5*time.Second
 		}
-		server := &http.Server{Addr: *listen, Handler: runnerHandler(token, limits, executeChild), ReadHeaderTimeout: 5 * time.Second, WriteTimeout: writeTimeout, MaxHeaderBytes: 8192}
+		execFn := func(ctx context.Context, in programrunner.Request) (programrunner.Response, error) {
+			return executeChildWithClient(ctx, in, sharedClient)
+		}
+		server := &http.Server{Addr: *listen, Handler: runnerHandler(token, limits, execFn), ReadHeaderTimeout: 5 * time.Second, WriteTimeout: writeTimeout, MaxHeaderBytes: 8192}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		go func() {
@@ -87,7 +105,7 @@ func main() {
 		}
 		return
 	}
-	_ = *child // one-shot is also the default CLI mode; no credentials are required.
+	_ = *child // one-shot CLI mode; no credentials are required.
 	in, err := decodeRequest(os.Stdin)
 	out := programrunner.Response{}
 	if err == nil {
@@ -122,6 +140,7 @@ func decodeOneJSON(reader io.Reader, value any) error {
 	}
 	return nil
 }
+
 func capLimits(in, host engine.ProgramLimits) engine.ProgramLimits {
 	if host.Timeout > 0 && (in.Timeout <= 0 || in.Timeout > host.Timeout) {
 		in.Timeout = host.Timeout
@@ -142,6 +161,13 @@ func capLimits(in, host engine.ProgramLimits) engine.ProgramLimits {
 }
 
 func classifyError(err error) *programrunner.Error {
+	var ge *fetchgov.GovernanceError
+	if errors.As(err, &ge) && strings.TrimSpace(ge.Code) != "" {
+		return &programrunner.Error{
+			Code:    strings.ToLower(strings.TrimSpace(ge.Code)),
+			Message: ge.Error(),
+		}
+	}
 	code := "execution_failed"
 	switch {
 	case errors.Is(err, errChildMemoryBudget):
@@ -274,7 +300,12 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	}
 	return b.Buffer.Write(p)
 }
+
 func executeChild(parent context.Context, in programrunner.Request) (programrunner.Response, error) {
+	return executeChildWithClient(parent, in, nil)
+}
+
+func executeChildWithClient(parent context.Context, in programrunner.Request, sharedClient *fetchgov.SafeClient) (programrunner.Response, error) {
 	var out programrunner.Response
 	memoryBytes, err := childMemoryBudget()
 	if err != nil {
@@ -291,17 +322,22 @@ func executeChild(parent context.Context, in programrunner.Request) (programrunn
 		ctx, deadlineCancel = context.WithTimeout(ctx, in.Limits.Timeout+2*time.Second)
 		defer deadlineCancel()
 	}
-	// The input map and checkpoint credentials stay in the parent. The isolated
-	// child only signals pipe frames without touching DB/Redis/callback secrets.
+	// Keep snapshots, checkpoint callback secrets, and AuthProfile metadata in
+	// the parent. When sharedClient != nil, the child runs in zero-socket IPC
+	// mode and proxies every http_request/http_render/checkpoint frame over pipes.
+	reqMeta := in
 	snapshots := in.Snapshots
 	in.Snapshots = nil
 	cbURL := in.CheckpointCallbackURL
 	cbToken := in.CheckpointCallbackToken
 	in.CheckpointCallbackURL = ""
 	in.CheckpointCallbackToken = ""
-	usePipe := len(snapshots) > 0 || cbURL != "" || in.HasCheckpoint
+	usePipe := sharedClient != nil || len(snapshots) > 0 || cbURL != "" || in.HasCheckpoint
 	if usePipe && cbURL != "" {
 		in.HasCheckpoint = true
+	}
+	if sharedClient != nil {
+		in.AuthProfile = ""
 	}
 	payload, err := json.Marshal(in)
 	if err != nil {
@@ -317,31 +353,32 @@ func executeChild(parent context.Context, in programrunner.Request) (programrunn
 	if err != nil {
 		return out, err
 	}
-	// Do not inherit model/search keys or the runner token into code processes.
+	// Never inherit runner token, DB/Redis DSNs, or AuthProfile secrets into child processes.
 	cmd.Env = []string{}
 	for _, name := range []string{"GOMEMLIMIT", "GOGC"} {
 		if value := os.Getenv(name); value != "" {
 			cmd.Env = append(cmd.Env, name+"="+value)
 		}
 	}
-	// Network routing is a trusted host setting, not a Lua-visible credential.
-	// Pass only the configured proxy; model/search keys and runner token stay out.
-	if proxy := os.Getenv("GORELAY_ACQUISITION_PROXY"); proxy != "" {
-		cmd.Env = append(cmd.Env, "GORELAY_ACQUISITION_PROXY="+proxy)
+	// Only pass proxy to direct-socket fallback; host-IPC children make zero outbound sockets.
+	if !usePipe {
+		if proxy := os.Getenv("GORELAY_ACQUISITION_PROXY"); proxy != "" {
+			cmd.Env = append(cmd.Env, "GORELAY_ACQUISITION_PROXY="+proxy)
+		}
 	}
 	if root := os.Getenv("SystemRoot"); root != "" {
 		cmd.Env = append(cmd.Env, "SystemRoot="+root)
 	}
 	stdout := &boundedBuffer{limit: int(programrunner.ResponseByteLimit(in.Limits))}
 	stderr := &boundedBuffer{limit: 4096}
-	var snapshotOutput io.ReadCloser
+	var pipeOutput io.ReadCloser
 	if usePipe {
-		snapshotOutput, err = cmd.StdoutPipe()
+		pipeOutput, err = cmd.StdoutPipe()
 		if err != nil {
 			_ = stdin.Close()
 			return out, err
 		}
-		defer snapshotOutput.Close()
+		defer pipeOutput.Close()
 	} else {
 		cmd.Stdout = stdout
 	}
@@ -359,9 +396,9 @@ func executeChild(parent context.Context, in programrunner.Request) (programrunn
 	}
 	defer isolation.Close()
 	var protocolErr error
-	if snapshotOutput != nil {
+	if pipeOutput != nil {
 		cpHooks := makeHTTPCallbackHooks(cbURL, cbToken)
-		out, protocolErr = exchangeChildPipe(ctx, stdin, snapshotOutput, payload, snapshots, programrunner.ResponseByteLimit(in.Limits), cpHooks)
+		out, protocolErr = exchangeChildPipeWithHost(ctx, stdin, pipeOutput, reqMeta, payload, snapshots, programrunner.ResponseByteLimit(in.Limits), cpHooks, sharedClient)
 	} else {
 		_, protocolErr = stdin.Write(payload)
 	}
@@ -388,7 +425,7 @@ func executeChild(parent context.Context, in programrunner.Request) (programrunn
 	if err != nil {
 		return out, fmt.Errorf("runner child terminated: %w", err)
 	}
-	if snapshotOutput == nil {
+	if pipeOutput == nil {
 		if err = json.Unmarshal(stdout.Bytes(), &out); err != nil {
 			return out, fmt.Errorf("runner child returned invalid JSON: %w", err)
 		}

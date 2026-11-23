@@ -38,15 +38,9 @@ func main() {
 		logger.Log.Fatal("数据库初始化失败", zap.Error(err))
 	}
 
-	govCfg := fetchgov.DefaultConfig()
-	govCfg.RespectRobots = !strings.EqualFold(os.Getenv("GORELAY_RESPECT_ROBOTS"), "false")
-	if sidecarURL := strings.TrimSpace(os.Getenv("GORELAY_BROWSER_CDP_URL")); sidecarURL != "" {
-		renderer, err := fetchgov.NewHTTPPageRenderer(sidecarURL, os.Getenv("GORELAY_BROWSER_CDP_TOKEN"), 2)
-		if err != nil {
-			logger.Log.Warn("failed to initialize browser sidecar renderer", zap.Error(err))
-		} else {
-			govCfg.Renderer = renderer
-		}
+	govCfg, err := fetchgov.ConfigFromEnv()
+	if err != nil {
+		logger.Log.Fatal("SafeClient config failed", zap.Error(err))
 	}
 	safeClient, err := fetchgov.NewSafeClient(govCfg)
 	if err != nil {

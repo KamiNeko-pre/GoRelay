@@ -43,9 +43,9 @@ func TestGeneratedTaskKeepsItsPersistedExecutionDeadline(t *testing.T) {
 	}{{"long-normal-task", time.Minute, true, false}, {"near-task-deadline", time.Second, true, false}, {"legacy", time.Minute, false, false}, {"expired-before-queue", -time.Second, true, false}, {"expired-after-reclaim", -time.Hour, true, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			deadline := time.Now().Add(tc.remaining)
-			value := map[string]any{"request_key": tc.name, "target": "test", "url": "https://example.com", "status": "queued", "execution_deadline": deadline}
+			value := map[string]any{"request_key": tc.name, "url": "https://example.com", "status": "queued", "execution_deadline": deadline}
 			if tc.generated {
-				value["program_hash"] = "verified-code"
+				value["source_id"] = "verified-source"
 			}
 			if tc.reclaimed {
 				value["status"] = "running"
@@ -82,7 +82,7 @@ func TestGeneratedTaskKeepsItsPersistedExecutionDeadline(t *testing.T) {
 				if err := db.First(&saved, row.ID).Error; err != nil {
 					t.Fatal(err)
 				}
-				if !actual.IsZero() || saved.Status != task.StatusFailed || saved.FailureCode != "lua_timeout" || saved.LeaseUntil != nil {
+				if !actual.IsZero() || saved.Status != task.StatusFailed || saved.FailureCode != "timeout" || saved.LeaseUntil != nil {
 					t.Fatal("expired work did not close without execution", actual, saved.Status, saved.FailureCode, saved.LeaseUntil)
 				}
 				return

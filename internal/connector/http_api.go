@@ -70,11 +70,19 @@ func ExecuteHTTPAPI(
 		}
 	}
 
+	remainingPages := maxPages
+	if state.PagesDone > 0 && maxPagesOverride == 0 {
+		remainingPages = maxPages - state.PagesDone
+		if remainingPages <= 0 {
+			return nil, nil, nil
+		}
+	}
+
 	urlGuard := pipeline.NewJobURLSet(time.Hour, 500)
 	var allRows []map[string]any
 	var allEvidence []acquisition.Response
 
-	for pageIter := 0; pageIter < maxPages; pageIter++ {
+	for pageIter := 0; pageIter < remainingPages; pageIter++ {
 		if err := ctx.Err(); err != nil {
 			return allRows, allEvidence, err
 		}

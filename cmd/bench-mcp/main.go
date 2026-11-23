@@ -26,22 +26,30 @@ import (
 )
 
 type BenchReport struct {
-	Mode                   string `json:"mode"`
-	ColdBuildRoundTrips    int    `json:"cold_build_round_trips"`
-	WarmReuseRoundTrips    int    `json:"warm_reuse_round_trips"`
-	CacheHitRoundTrips     int    `json:"cache_hit_round_trips"`
-	BaselineRawBytes       int    `json:"baseline_raw_bytes"`
-	GoRelayProjectedBytes  int    `json:"gorelay_projected_bytes"`
-	PayloadReductionPct    float64 `json:"payload_reduction_pct"`
-	DriftBlockedOverwrite  bool   `json:"drift_blocked_overwrite"`
-	CheckpointResumedPage2 bool   `json:"checkpoint_resumed_page_2"`
-	HTTPAPIPromoted        bool   `json:"http_api_promoted"`
-	SimDurationMS          int64  `json:"sim_duration_ms"`
+	Mode                   string  `json:"mode"`
+	TargetURL              string  `json:"target_url,omitempty"`
+	SourceID               string  `json:"source_id,omitempty"`
+	ColdBuildRoundTrips    int     `json:"cold_build_round_trips"`
+	WarmReuseRoundTrips    int     `json:"warm_reuse_round_trips"`
+	CacheHitRoundTrips     int     `json:"cache_hit_round_trips"`
+	ColdBuildLatencyMS     int64   `json:"cold_build_latency_ms,omitempty"`
+	WarmReuseLatencyMS     int64   `json:"warm_reuse_latency_ms,omitempty"`
+	CacheHitLatencyMS      int64   `json:"cache_hit_latency_ms,omitempty"`
+	BaselineRawBytes       int     `json:"baseline_raw_bytes,omitempty"`
+	GoRelayProjectedBytes  int     `json:"gorelay_projected_bytes,omitempty"`
+	PayloadReductionPct    float64 `json:"payload_reduction_pct,omitempty"`
+	DriftBlockedOverwrite  bool    `json:"drift_blocked_overwrite,omitempty"`
+	CheckpointResumedPage2 bool    `json:"checkpoint_resumed_page_2,omitempty"`
+	HTTPAPIPromoted        bool    `json:"http_api_promoted"`
+	CacheHitVerified       bool    `json:"cache_hit_verified,omitempty"`
+	DurationMS             int64   `json:"duration_ms"`
 }
 
 func main() {
-	mode := flag.String("mode", "sim", "Benchmark mode: sim (self-contained offline) or live (HTTP MCP server)")
+	mode := flag.String("mode", "sim", "Benchmark mode: sim (self-contained offline) or live (real HTTP MCP server)")
 	endpoint := flag.String("mcp", "http://127.0.0.1:8080/mcp", "Live MCP endpoint for -mode live")
+	targetURL := flag.String("target-url", "", "Public JSON API URL to probe/deploy/reuse in -mode live")
+	sourceID := flag.String("source-id", "", "Optional connector source_id for -mode live (default auto-generated)")
 	flag.Parse()
 
 	var report BenchReport
@@ -50,7 +58,7 @@ func main() {
 	case "sim":
 		report, err = runSimulation(context.Background())
 	case "live":
-		report, err = runLiveCheck(context.Background(), *endpoint, os.Getenv("GORELAY_ADMIN_TOKEN"))
+		report, err = runLiveCheck(context.Background(), *endpoint, os.Getenv("GORELAY_ADMIN_TOKEN"), *targetURL, *sourceID)
 	default:
 		err = fmt.Errorf("unknown mode %q (want sim or live)", *mode)
 	}
@@ -189,11 +197,9 @@ func runSimulation(ctx context.Context) (BenchReport, error) {
 	driftBlocked := driftDiag != nil && driftDiag.Code == "SOFT_BLOCK_PAGE"
 
 	// Ensure Lua sandbox compiles cleanly in benchmark binary.
-	luaResp, err := programrunner.Run(ctx, programrunner.Request{
+	if _, err := programrunner.Run(ctx, programrunner.Request{
 		Program: engine.ProgramRequest{Code: `return true, {items={{id="ok", notes="sandbox"}}}`},
-	})
-	_ = luaResp
-	if err != nil {
+	}); err != nil {
 		return BenchReport{}, err
 	}
 
@@ -208,29 +214,159 @@ func runSimulation(ctx context.Context) (BenchReport, error) {
 		DriftBlockedOverwrite:  driftBlocked,
 		CheckpointResumedPage2: resumedOnlyPage2,
 		HTTPAPIPromoted:        promoted,
-		SimDurationMS:          time.Since(start).Milliseconds(),
+		DurationMS:             time.Since(start).Milliseconds(),
 	}, nil
 }
 
-func runLiveCheck(ctx context.Context, endpoint, token string) (BenchReport, error) {
+func runLiveCheck(ctx context.Context, endpoint, token, targetURL, sourceID string) (BenchReport, error) {
+	targetURL = strings.TrimSpace(targetURL)
+	if targetURL == "" {
+		return BenchReport{}, fmt.Errorf("-target-url is required for -mode live (refusing to report stub metrics)")
+	}
+	if strings.TrimSpace(sourceID) == "" {
+		sourceID = fmt.Sprintf("bench_live_%d", time.Now().Unix())
+	}
+
 	start := time.Now()
 	client := mcp.NewClient(&mcp.Implementation{Name: "gorelay-bench", Version: "2.0.0"}, nil)
-	httpClient := &http.Client{Transport: bearerTransport{token: token}}
+	httpClient := &http.Client{Transport: bearerTransport{token: token}, Timeout: 60 * time.Second}
 	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: httpClient}, nil)
+	if err != nil {
+		return BenchReport{}, fmt.Errorf("connect MCP %s: %w", endpoint, err)
+	}
+	defer session.Close()
+
+	// 1. Cold Build Round 1: gorelay_probe_source
+	coldStart := time.Now()
+	var probeReply mcpserver.ToolReply[mcpserver.ProbeSourceOutput]
+	if _, err := callToolReply(ctx, session, "gorelay_probe_source", map[string]any{
+		"url":        targetURL,
+		"detect_api": true,
+	}, &probeReply); err != nil {
+		return BenchReport{}, fmt.Errorf("gorelay_probe_source: %w", err)
+	}
+	if probeReply.Data == nil {
+		return BenchReport{}, fmt.Errorf("gorelay_probe_source returned empty data")
+	}
+	probeRes := *probeReply.Data
+	if probeRes.RecommendedExecutor != connector.ExecutorHTTPAPI || probeRes.DraftAPISpec == nil {
+		return BenchReport{}, fmt.Errorf("target %q probed as %q (%s) without draft_api_spec; pass a public JSON API endpoint for live http_api benchmark", targetURL, probeRes.Kind, probeRes.RecommendedExecutor)
+	}
+
+	// Build a minimal valid OutputSchema from the probed DraftAPISpec fields.
+	outSchema := buildSchemaFromDraftSpec(probeRes.DraftAPISpec)
+	specBytes, err := json.Marshal(probeRes.DraftAPISpec)
 	if err != nil {
 		return BenchReport{}, err
 	}
-	defer session.Close()
-	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "gorelay_list_sources", Arguments: map[string]any{}}); err != nil {
-		return BenchReport{}, err
+
+	// 2. Cold Build Round 2: gorelay_deploy_and_run
+	var deployReply mcpserver.ToolReply[mcpserver.ExecutionOutput]
+	if _, err := callToolReply(ctx, session, "gorelay_deploy_and_run", map[string]any{
+		"source_id":     sourceID,
+		"kind":          connector.KindData,
+		"executor":      connector.ExecutorHTTPAPI,
+		"description":   "live MCP benchmark connector",
+		"target_url":    targetURL,
+		"spec_or_code":  string(specBytes),
+		"output_schema": outSchema,
+		"wait_ms":       10000,
+	}, &deployReply); err != nil {
+		return BenchReport{}, fmt.Errorf("gorelay_deploy_and_run: %w", err)
 	}
+	coldLatency := time.Since(coldStart).Milliseconds()
+	if deployReply.Data == nil || deployReply.Data.Status != "succeeded" {
+		return BenchReport{}, fmt.Errorf("cold build did not complete synchronously: %+v", deployReply.Data)
+	}
+
+	// 3. Warm Reuse (1 MCP round-trip, force_refresh=true)
+	warmStart := time.Now()
+	var warmReply mcpserver.ToolReply[mcpserver.ExecutionOutput]
+	if _, err := callToolReply(ctx, session, "gorelay_run_connector", map[string]any{
+		"source_id":     sourceID,
+		"force_refresh": true,
+		"wait_ms":       10000,
+	}, &warmReply); err != nil {
+		return BenchReport{}, fmt.Errorf("gorelay_run_connector (warm): %w", err)
+	}
+	warmLatency := time.Since(warmStart).Milliseconds()
+	if warmReply.Data == nil || warmReply.Data.Status != "succeeded" {
+		return BenchReport{}, fmt.Errorf("warm reuse did not succeed: %+v", warmReply.Data)
+	}
+
+	// 4. Fresh Cache Hit (1 MCP round-trip, 0 upstream HTTP)
+	cacheStart := time.Now()
+	var cacheReply mcpserver.ToolReply[mcpserver.ExecutionOutput]
+	cacheBytes, err := callToolReply(ctx, session, "gorelay_run_connector", map[string]any{
+		"source_id":         sourceID,
+		"freshness_ttl_sec": 600,
+	}, &cacheReply)
+	if err != nil {
+		return BenchReport{}, fmt.Errorf("gorelay_run_connector (cache_hit): %w", err)
+	}
+	cacheLatency := time.Since(cacheStart).Milliseconds()
+	cacheVerified := cacheReply.Data != nil && (cacheReply.Data.HitType == connector.HitCacheHit || cacheReply.Data.Status == connector.HitCacheHit)
+
 	return BenchReport{
-		Mode:                "live",
-		ColdBuildRoundTrips: 2,
-		WarmReuseRoundTrips: 1,
-		CacheHitRoundTrips:  1,
-		SimDurationMS:       time.Since(start).Milliseconds(),
+		Mode:                  "live",
+		TargetURL:             targetURL,
+		SourceID:              sourceID,
+		ColdBuildRoundTrips:   2,
+		WarmReuseRoundTrips:   1,
+		CacheHitRoundTrips:    1,
+		ColdBuildLatencyMS:    coldLatency,
+		WarmReuseLatencyMS:    warmLatency,
+		CacheHitLatencyMS:     cacheLatency,
+		GoRelayProjectedBytes: cacheBytes,
+		HTTPAPIPromoted:       true,
+		CacheHitVerified:      cacheVerified,
+		DurationMS:            time.Since(start).Milliseconds(),
 	}, nil
+}
+
+func callToolReply(ctx context.Context, session *mcp.ClientSession, name string, args map[string]any, dst any) (int, error) {
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		return 0, err
+	}
+	if len(res.Content) == 0 {
+		return 0, fmt.Errorf("empty MCP response content")
+	}
+	txt, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		return 0, fmt.Errorf("unexpected MCP content type %T", res.Content[0])
+	}
+	if res.IsError {
+		return len(txt.Text), fmt.Errorf("MCP tool error: %s", txt.Text)
+	}
+	if err := json.Unmarshal([]byte(txt.Text), dst); err != nil {
+		return len(txt.Text), fmt.Errorf("decode MCP tool reply: %w", err)
+	}
+	return len(txt.Text), nil
+}
+
+func buildSchemaFromDraftSpec(draft *probe.DraftAPISpec) map[string]any {
+	fields := make([]map[string]any, 0, len(draft.FieldMapping))
+	var firstKey string
+	for name := range draft.FieldMapping {
+		if firstKey == "" || name == "id" || name == "url" {
+			firstKey = name
+		}
+		fields = append(fields, map[string]any{
+			"name":     name,
+			"type":     "any",
+			"required": name == firstKey,
+		})
+	}
+	if firstKey == "" {
+		firstKey = "source_url"
+		fields = append(fields, map[string]any{"name": "source_url", "type": "string", "required": true})
+	}
+	return map[string]any{
+		"entity_keys": []string{firstKey},
+		"min_rows":    1,
+		"fields":      fields,
+	}
 }
 
 type bearerTransport struct{ token string }

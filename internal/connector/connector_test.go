@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gorelay/internal/acquisition"
+	"gorelay/internal/contract"
 	"gorelay/internal/engine"
 	"gorelay/internal/fetchgov"
 	"gorelay/internal/pipeline"
@@ -117,7 +118,7 @@ func TestCheckpointHubAuthAndHandlers(t *testing.T) {
 
 func TestConnectorServiceFullLifecycleDB(t *testing.T) {
 	db := testdb.Open(t)
-	if err := repository.AutoMigrate(db, &taskmodel.CrawlTask{}, &taskmodel.TaskOutbox{}, &taskmodel.TaskEvent{}, &repository.CrawlResult{}); err != nil {
+	if err := repository.AutoMigrate(db, &taskmodel.CrawlTask{}, &taskmodel.TaskOutbox{}, &taskmodel.TaskEvent{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := pipeline.Migrate(db); err != nil {
@@ -131,12 +132,14 @@ func TestConnectorServiceFullLifecycleDB(t *testing.T) {
 	t.Cleanup(func() { repository.DB = prevDB })
 
 	var simulateDrift atomic.Bool
+	var upstreamHits atomic.Int32
 	cfg := fetchgov.DefaultConfig()
 	cfg.RespectRobots = false
 	cfg.RequestsPerSec = 100
 	cfg.Burst = 100
 	cfg.RequesterFactory = func(acquisition.Policy) (fetchgov.Requester, error) {
 		return &apiStubRequester{fn: func(_ context.Context, opts acquisition.RequestOptions) (acquisition.Response, error) {
+			upstreamHits.Add(1)
 			if simulateDrift.Load() {
 				return acquisition.Response{
 					Body:    `{"items":[{"unexpected_field":"broken"}]}`,
@@ -201,6 +204,9 @@ func TestConnectorServiceFullLifecycleDB(t *testing.T) {
 	if err != nil || res.Status != "succeeded" || res.Data == nil || res.Data.Returned != 1 {
 		t.Fatalf("cold deploy failed: res=%+v err=%v", res, err)
 	}
+	if upstreamHits.Load() != 1 {
+		t.Fatalf("DeployAndRun double-fetched upstream: got %d hits, want 1", upstreamHits.Load())
+	}
 
 	// 2. Fresh cache hit (0 HTTP)
 	cacheRes, err := svc.RunConnector(context.Background(), RunConnectorInput{
@@ -226,5 +232,97 @@ func TestConnectorServiceFullLifecycleDB(t *testing.T) {
 	oldRows, err := svc.Pipeline.DeliverRecordsPage(context.Background(), "go_releases", 0, "", 16384, 20, "http://localhost:8080")
 	if err != nil || oldRows.Returned != 1 || oldRows.Records[0]["id"] != "go1.26" {
 		t.Fatalf("old valid snapshot was corrupted after silent drift: %+v err=%v", oldRows, err)
+	}
+	var connRow Connector
+	if err := db.First(&connRow, "source_id = ?", "go_releases").Error; err != nil || connRow.Status != StatusDegraded {
+		t.Fatalf("expected connector status=degraded committed after drift rollback, got %+v err=%v", connRow, err)
+	}
+	var driftCount int64
+	db.Model(&DriftEvent{}).Where("source_id = ?", "go_releases").Count(&driftCount)
+	if driftCount == 0 {
+		t.Fatalf("expected DriftEvent committed after rollback, got 0")
+	}
+}
+
+func TestTrialOutcomeSingleFetchAndMultiPageResume(t *testing.T) {
+	var hits atomic.Int32
+	cfg := fetchgov.DefaultConfig()
+	cfg.RespectRobots = false
+	cfg.RequestsPerSec = 100
+	cfg.Burst = 100
+	cfg.RequesterFactory = func(acquisition.Policy) (fetchgov.Requester, error) {
+		return &apiStubRequester{fn: func(_ context.Context, opts acquisition.RequestOptions) (acquisition.Response, error) {
+			hits.Add(1)
+			if strings.Contains(opts.URL, "page=2") {
+				return acquisition.Response{
+					Body:    `{"has_more":true,"items":[{"id":"p2","title":"Page 2"}]}`,
+					Receipt: acquisition.Receipt{URL: opts.URL, Status: 200, Headers: map[string]string{"content-type": "application/json"}},
+				}, nil
+			}
+			return acquisition.Response{
+				Body:    `{"has_more":true,"items":[{"id":"p1","title":"Page 1"}]}`,
+				Receipt: acquisition.Receipt{URL: opts.URL, Status: 200, Headers: map[string]string{"content-type": "application/json"}},
+			}, nil
+		}}, nil
+	}
+	gov, err := fetchgov.NewSafeClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{SafeClient: gov}
+	_, schema, err := contract.NormalizeOutputSchema(json.RawMessage(`{"entity_keys":["id"],"min_rows":1,"fields":[{"name":"id","type":"string","required":true},{"name":"title","type":"string","required":true}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Single-page spec: NextCursor must be nil (zero worker follow-up).
+	singleSpec := APISpec{
+		URLTemplate:  "https://api.example.com/items",
+		Method:       http.MethodGet,
+		ItemsPath:    "/items",
+		FieldMapping: map[string]string{"id": "/id", "title": "/title"},
+		Pagination:   "none",
+	}
+	singleOutcome, err := svc.validateAPITrial(context.Background(), singleSpec, nil, "", schema)
+	if err != nil || singleOutcome.NextCursor != nil || len(singleOutcome.Rows) != 1 || hits.Load() != 1 {
+		t.Fatalf("unexpected single-page trial outcome: %+v hits=%d err=%v", singleOutcome, hits.Load(), err)
+	}
+
+	// Multi-page spec (MaxPages=2): trial fetches page 1 ONLY and returns cursor for page 2.
+	hits.Store(0)
+	multiSpec := APISpec{
+		URLTemplate:    "https://api.example.com/items",
+		Method:         http.MethodGet,
+		ItemsPath:      "/items",
+		FieldMapping:   map[string]string{"id": "/id", "title": "/title"},
+		Pagination:     "page",
+		PageParam:      "page",
+		NextCursorPath: "/has_more",
+		MaxPages:       2,
+	}
+	multiOutcome, err := svc.validateAPITrial(context.Background(), multiSpec, nil, "", schema)
+	if err != nil || multiOutcome.NextCursor == nil || len(multiOutcome.Rows) != 1 || hits.Load() != 1 {
+		t.Fatalf("unexpected multi-page trial outcome: %+v hits=%d err=%v", multiOutcome, hits.Load(), err)
+	}
+
+	// Resuming ExecuteHTTPAPI with trial's NextCursor (PagesDone=1) must fetch ONLY page 2 (total 2 pages, respecting MaxPages=2).
+	resumedRows, _, err := ExecuteHTTPAPI(context.Background(), gov, multiSpec, nil, "", 0, &engine.CheckpointHooks{
+		Get: func(context.Context) (any, error) { return multiOutcome.NextCursor, nil },
+	})
+	if err != nil || hits.Load() != 2 || len(resumedRows) != 1 || resumedRows[0]["id"] != "p2" {
+		t.Fatalf("resumed multi-page run did not honor PagesDone cap: rows=%+v hits=%d err=%v", resumedRows, hits.Load(), err)
+	}
+
+	// Lua trial using checkpoint.save must capture CheckpointedItems + FinalCheckpoint without re-fetching.
+	luaCode := `
+local body, err = http_get(TARGET_URL)
+if err then return false, err end
+local data = json_decode(body)
+checkpoint.save({next_page = 2}, data.items)
+return true, {items = {}}
+`
+	luaOutcome, err := svc.validateLuaTrial(context.Background(), "https://api.example.com/items", luaCode, nil, "", schema)
+	if err != nil || len(luaOutcome.Rows) != 1 || luaOutcome.Rows[0]["id"] != "p1" || luaOutcome.NextCursor == nil {
+		t.Fatalf("lua trial failed to capture checkpointed rows/cursor: %+v err=%v", luaOutcome, err)
 	}
 }

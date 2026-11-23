@@ -2,7 +2,6 @@ package probe
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -15,6 +14,7 @@ import (
 const CompactLuaContract = `Sandbox globals: TARGET_URL (string), PARAMS (table).
 Functions:
 - http_request({url=..., method="GET", headers={...}, body="..."}) -> {ok, status, final_url, body, headers}
+- http_render(url[, wait_selector]) -> html, err (optional CDP sidecar; use only for dynamic SPA shells)
 - json_decode(str) -> table | html_find(html, css) -> text | html_find_all(html, css) -> {texts}
 - html_attr_all(html, css, attr) -> {values} | clean_text(str) -> str | url_resolve(base, rel) -> url
 - checkpoint.get() -> cursor_table|nil
@@ -113,17 +113,13 @@ func (p *Prober) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 			}
 			for _, capAPI := range renderRes.NetworkAPIs {
 				res.NetworkCaptures = append(res.NetworkCaptures, capAPI)
-				var fields map[string]string
-				if len(capAPI.ResponseSchema) > 0 {
-					_ = json.Unmarshal(capAPI.ResponseSchema, &fields)
-				}
 				res.CandidateAPIs = append(res.CandidateAPIs, CandidateAPI{
 					Source:       "xhr_network",
 					Method:       capAPI.Method,
 					URL:          capAPI.URL,
 					Status:       capAPI.Status,
 					ContentType:  capAPI.ContentType,
-					SampleFields: fields,
+					SampleFields: capAPI.ResponseSchema,
 				})
 			}
 		} else {

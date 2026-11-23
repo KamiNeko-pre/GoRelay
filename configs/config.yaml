@@ -1,10 +1,10 @@
 app:
     port: 8080
-    proxy: "http://host.docker.internal:7897"
+    proxy: ""
     pprof_port: 0
 
 mysql:
-    # Set LUA_SPIDER_MYSQL_DSN in the local environment before starting.
+    # Set GORELAY_MYSQL_DSN in the local environment before starting.
     dsn: ""
     max_idle_conns: 10
     max_open_conns: 100
@@ -13,8 +13,8 @@ redis:
     addr: "127.0.0.1:6379"
     password: ""
     db: 0
-    stream: "crawler:tasks"
-    consumer_group: "crawler-workers"
+    stream: "gorelay:tasks"
+    consumer_group: "gorelay-workers"
 
 publisher:
     batch_size: 100

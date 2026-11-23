@@ -22,7 +22,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"gorelay/internal/agentstatus"
 	"golang.org/x/net/html/charset"
 	"golang.org/x/net/publicsuffix"
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -121,7 +120,7 @@ type NetworkAPICapture struct {
 	SentCookies    bool              `json:"sent_cookies,omitempty"`
 	SetsCookie     bool              `json:"sets_cookie,omitempty"`
 	RequestBody    string            `json:"request_body,omitempty"`
-	ResponseSchema json.RawMessage   `json:"response_json_paths,omitempty"`
+	ResponseSchema map[string]string `json:"response_json_paths,omitempty"`
 }
 type Response struct {
 	Body    string  `json:"body"`
@@ -366,26 +365,14 @@ func (b *budgetBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (f *PublicFetcher) Fetch(ctx context.Context, method, rawURL string) (out Response, err error) {
-	parent := ctx
-	defer func() {
-		if err != nil && parent.Err() == nil {
-			err = agentstatus.Wrap(agentstatus.SourceUnavailable, err, "Inspect the saved source response or transport diagnostic. Correct the source request, choose another source, or report its unavailability; this is not a model-gateway or database failure.")
-		}
-	}()
+func (f *PublicFetcher) Fetch(ctx context.Context, method, rawURL string) (Response, error) {
 	return f.fetchOnce(ctx, method, rawURL)
 }
 
 // FetchRequest executes GET/HEAD/POST with caller-supplied headers and body,
 // returning the decoded body and response headers even on 4xx/5xx status codes
 // so scripts and fault-recovery logic can diagnose anti-bot or API errors.
-func (f *PublicFetcher) FetchRequest(ctx context.Context, opts RequestOptions) (out Response, err error) {
-	parent := ctx
-	defer func() {
-		if err != nil && parent.Err() == nil {
-			err = agentstatus.Wrap(agentstatus.SourceUnavailable, err, "Inspect the saved source response or transport diagnostic. Correct the source request, choose another source, or report its unavailability; this is not a model-gateway or database failure.")
-		}
-	}()
+func (f *PublicFetcher) FetchRequest(ctx context.Context, opts RequestOptions) (Response, error) {
 	return f.fetchWithOptions(ctx, opts, false)
 }
 

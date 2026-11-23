@@ -2,7 +2,6 @@ package probe
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -93,7 +92,7 @@ func TestProberDetectsEmbeddedAndXHRCandidatesOnSPA(t *testing.T) {
 				URL:            "https://app.example.com/api/v1/feed?page=1",
 				Status:         200,
 				ContentType:    "application/json",
-				ResponseSchema: json.RawMessage(`{"title":"string","id":"string"}`),
+				ResponseSchema: map[string]string{"title": "string", "id": "string"},
 			}},
 		},
 	}

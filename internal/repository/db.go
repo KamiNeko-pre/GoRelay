@@ -57,7 +57,7 @@ func InitDB() error {
 	sqlDB.SetMaxIdleConns(cfg.MySQL.MaxIdleConns)
 	sqlDB.SetMaxOpenConns(cfg.MySQL.MaxOpenConns)
 
-	if err := AutoMigrate(db, &taskmodel.CrawlTask{}, &taskmodel.TaskOutbox{}, &taskmodel.TaskEvent{}, &CrawlResult{}, &FrozenRule{}); err != nil {
+	if err := AutoMigrate(db, &taskmodel.CrawlTask{}, &taskmodel.TaskOutbox{}, &taskmodel.TaskEvent{}); err != nil {
 		return fmt.Errorf("建表失败: %w", err)
 	}
 	DB = db

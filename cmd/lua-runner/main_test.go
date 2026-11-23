@@ -14,6 +14,7 @@ import (
 
 	"gorelay/internal/acquisition"
 	"gorelay/internal/engine"
+	"gorelay/internal/fetchgov"
 )
 
 func TestRunnerHTTPAuthAndHostBudgetCaps(t *testing.T) {
@@ -298,5 +299,182 @@ return true, {items = {{id = "p5", url = "https://example.com/5"}}}
 	}
 	if m, ok := cur.(map[string]any); !ok || m["next_page"] != float64(6) {
 		t.Fatalf("expected updated cursor next_page=6, got %#v", cur)
+	}
+}
+
+type ipcStubRequester struct {
+	fn func(ctx context.Context, opts acquisition.RequestOptions) (acquisition.Response, error)
+}
+
+func (s *ipcStubRequester) FetchRequest(ctx context.Context, opts acquisition.RequestOptions) (acquisition.Response, error) {
+	return s.fn(ctx, opts)
+}
+func (s *ipcStubRequester) Close() {}
+
+type ipcStubRenderer struct {
+	fn func(ctx context.Context, req fetchgov.RenderRequest) (fetchgov.RenderResult, error)
+}
+
+func (r *ipcStubRenderer) RenderAndSniff(ctx context.Context, req fetchgov.RenderRequest) (fetchgov.RenderResult, error) {
+	return r.fn(ctx, req)
+}
+
+func runPipeRoundTrip(t *testing.T, req programrunner.Request, gov *fetchgov.SafeClient) programrunner.Response {
+	t.Helper()
+	childReq := req
+	childReq.AuthProfile = ""
+	payload, err := json.Marshal(childReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	childErr := make(chan error, 1)
+	go func() {
+		defer outW.Close()
+		defer inR.Close()
+		childErr <- runSnapshotChild(inR, outW)
+	}()
+	resp, err := exchangeChildPipeWithHost(context.Background(), inW, outR, req, payload, nil, 0, nil, gov)
+	_ = inW.Close()
+	_ = outR.Close()
+	if err != nil {
+		t.Fatalf("exchangeChildPipeWithHost failed: %v", err)
+	}
+	if ce := <-childErr; ce != nil {
+		t.Fatalf("runSnapshotChild failed: %v", ce)
+	}
+	return resp
+}
+
+func TestChildIPCSharesParentSafeClientCircuitBreakerAndAuthProfile(t *testing.T) {
+	var calls int
+	var seenAuth string
+	return429 := false
+
+	cfg := fetchgov.DefaultConfig()
+	cfg.RespectRobots = false
+	cfg.RequestsPerSec = 100
+	cfg.Burst = 100
+	cfg.CircuitThreshold = 2
+	cfg.CircuitCooldown = 30 * time.Second
+	cfg.AuthProfiles = map[string]fetchgov.AuthProfile{
+		"corp_api": {
+			Name:           "corp_api",
+			AllowedDomains: []string{"api.example.com"},
+			HeaderName:     "Authorization",
+			HeaderPrefix:   "Bearer ",
+			Secret:         "parent-only-secret",
+		},
+	}
+	cfg.RequesterFactory = func(acquisition.Policy) (fetchgov.Requester, error) {
+		return &ipcStubRequester{fn: func(_ context.Context, opts acquisition.RequestOptions) (acquisition.Response, error) {
+			calls++
+			seenAuth = opts.Headers["Authorization"]
+			if return429 {
+				return acquisition.Response{
+					Body:    "rate limited",
+					Receipt: acquisition.Receipt{URL: opts.URL, Status: 429, Headers: map[string]string{"retry-after": "30"}},
+				}, nil
+			}
+			return acquisition.Response{
+				Body:    `{"items":[{"id":"1","title":"Verified"}]}`,
+				Receipt: acquisition.Receipt{URL: opts.URL, Status: 200, Headers: map[string]string{"content-type": "application/json"}},
+			}, nil
+		}}, nil
+	}
+	sharedClient, err := fetchgov.NewSafeClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sharedClient.Close()
+
+	req := programrunner.Request{
+		AuthProfile:    "corp_api",
+		AllowedDomains: []string{"api.example.com"},
+		Program: engine.ProgramRequest{
+			TargetURL: "https://api.example.com/v1/items",
+			Code: `
+local body, err = http_get(TARGET_URL)
+if err then return false, err end
+local data = json_decode(body)
+return true, {items = data.items}
+`,
+		},
+	}
+
+	// Run 1: succeeds and parent injects scoped AuthProfile header without exposing it to child.
+	r1 := runPipeRoundTrip(t, req, sharedClient)
+	if r1.Error != nil || r1.Result == nil || seenAuth != "Bearer parent-only-secret" || calls != 1 {
+		t.Fatalf("run 1 failed: err=%+v seenAuth=%q calls=%d", r1.Error, seenAuth, calls)
+	}
+
+	// Run 2: upstream returns HTTP 429 with Retry-After -> trips parent SafeClient circuit breaker.
+	return429 = true
+	r2 := runPipeRoundTrip(t, req, sharedClient)
+	if r2.Error == nil || r2.Error.Code != "rate_limited" {
+		t.Fatalf("expected rate_limited on run 2, got %+v", r2.Error)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 upstream calls before circuit opens, got %d", calls)
+	}
+
+	// Run 3: brand new child execution hits shared parent CIRCUIT_OPEN with ZERO upstream call!
+	r3 := runPipeRoundTrip(t, req, sharedClient)
+	if r3.Error == nil || r3.Error.Code != "circuit_open" {
+		t.Fatalf("expected shared parent circuit_open on run 3, got %+v", r3.Error)
+	}
+	if calls != 2 {
+		t.Fatalf("circuit breaker did not short-circuit across child executions: calls=%d want 2", calls)
+	}
+}
+
+func TestChildIPCHTTPRenderProxiesToSidecarRenderer(t *testing.T) {
+	var capturedSelector string
+	cfg := fetchgov.DefaultConfig()
+	cfg.RespectRobots = false
+	cfg.RequestsPerSec = 100
+	cfg.Burst = 100
+	cfg.Renderer = &ipcStubRenderer{fn: func(_ context.Context, req fetchgov.RenderRequest) (fetchgov.RenderResult, error) {
+		capturedSelector = req.WaitSelector
+		return fetchgov.RenderResult{
+			FinalURL: req.URL,
+			HTML:     `<html><body><div class="job-title">Go Systems Intern</div></body></html>`,
+		}, nil
+	}}
+	sharedClient, err := fetchgov.NewSafeClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sharedClient.Close()
+
+	req := programrunner.Request{
+		AllowedDomains: []string{"spa.example.com"},
+		Program: engine.ProgramRequest{
+			TargetURL: "https://spa.example.com/careers",
+			Code: `
+local html, err = http_render(TARGET_URL, ".job-title")
+if err then return false, err end
+local title, ferr = html_find(html, ".job-title")
+if ferr then return false, ferr end
+return true, {items = {{title = title, url = TARGET_URL}}}
+`,
+		},
+	}
+
+	resp := runPipeRoundTrip(t, req, sharedClient)
+	if resp.Error != nil || resp.Result == nil {
+		t.Fatalf("http_render child IPC failed: err=%+v", resp.Error)
+	}
+	if capturedSelector != ".job-title" {
+		t.Fatalf("expected wait_selector '.job-title', got %q", capturedSelector)
+	}
+	items := resp.Result.Collection["items"].([]any)
+	first := items[0].(map[string]any)
+	if first["title"] != "Go Systems Intern" {
+		t.Fatalf("unexpected rendered item: %+v", first)
+	}
+	if len(resp.Result.SourceEvidence) != 1 || resp.Result.SourceEvidence[0].Receipt.Method != "RENDER" {
+		t.Fatalf("expected RENDER SourceEvidence recorded, got %+v", resp.Result.SourceEvidence)
 	}
 }

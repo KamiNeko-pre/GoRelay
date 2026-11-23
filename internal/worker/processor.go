@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"gorelay/internal/engine"
+	"strings"
 	"sync"
 	"time"
 
+	"gorelay/internal/fetchgov"
+	"gorelay/internal/pipeline"
+	"gorelay/internal/programrunner"
 	"gorelay/internal/repository"
 	taskmodel "gorelay/internal/task"
 
@@ -44,7 +47,7 @@ func NewProcessor(client *redis.Client, cfg Config, executors ...func(context.Co
 	if cfg.ExecutionTimeout <= 0 {
 		cfg.ExecutionTimeout = 30 * time.Second
 	}
-	execute := engine.ExecuteTask
+	var execute func(context.Context, taskmodel.CrawlTask) (repository.PersistTaskResult, error)
 	if len(executors) > 0 && executors[0] != nil {
 		execute = executors[0]
 	}
@@ -74,19 +77,17 @@ func (processor *Processor) process(ctx context.Context, message redis.XMessage,
 		if err := processor.ack(ctx, message.ID); err != nil {
 			return err
 		}
-		processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageAcked, taskmodel.EventLevelInfo, "消息确认", "终态任务无需重复执行，Redis 消息已确认")
+		processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageAcked, taskmodel.EventLevelInfo, "acked", "终态任务无需重复执行，Redis 消息已确认")
 		return nil
 	}
-	// Reserve ten seconds for completion inside the lease. Acquisition time
-	// consumes this absolute budget instead of granting a fresh lease afterward.
+	// Reserve completion headroom inside the lease unless the task explicitly
+	// specifies an execution deadline (in which case lease tracks ClaimMinIdle
+	// and is renewed periodically while active).
 	executionDeadline := time.Now().Add(processor.config.ExecutionTimeout + 5*time.Second)
 	leaseDuration := processor.config.ExecutionTimeout + 15*time.Second
-	if crawlTask.ProgramHash != "" {
-		executionDeadline = time.Time{}
+	if crawlTask.SourceID != "" && crawlTask.ExecutionDeadline != nil {
+		executionDeadline = *crawlTask.ExecutionDeadline
 		leaseDuration = processor.config.ClaimMinIdle
-		if crawlTask.ExecutionDeadline != nil {
-			executionDeadline = *crawlTask.ExecutionDeadline
-		}
 	}
 	claimCtx, stopClaim := context.WithTimeout(ctx, 5*time.Second)
 	token, err := repository.ClaimCrawlTask(claimCtx, crawlTask, leaseDuration, reclaim)
@@ -100,7 +101,7 @@ func (processor *Processor) process(ctx context.Context, message redis.XMessage,
 		return fmt.Errorf("claim task %d: %w", crawlTask.ID, err)
 	}
 	crawlTask.RunToken = token
-	processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageClaimed, taskmodel.EventLevelInfo, "获取任务", "Worker 已获取任务租约")
+	processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageClaimed, taskmodel.EventLevelInfo, "claimed", "Worker 已获取任务租约")
 	execCtx, cancel := context.WithCancel(ctx)
 	activeCancels.Store(crawlTask.ID, cancel)
 	defer activeCancels.Delete(crawlTask.ID)
@@ -110,8 +111,8 @@ func (processor *Processor) process(ctx context.Context, message redis.XMessage,
 		defer deadlineCancel()
 	}
 	var stopRenew func() error
-	if crawlTask.ProgramHash != "" || crawlTask.SourceID != "" {
-		stopRenew = processor.renewExecution(execCtx, cancel, crawlTask.ID, token, leaseDuration, crawlTask.RunID)
+	if crawlTask.SourceID != "" {
+		stopRenew = processor.renewExecution(execCtx, cancel, crawlTask.ID, token, leaseDuration)
 	}
 	var persist repository.PersistTaskResult
 	executionErr := execCtx.Err()
@@ -131,18 +132,13 @@ func (processor *Processor) process(ctx context.Context, message redis.XMessage,
 	status := taskmodel.StatusSucceeded
 	failureCode, lastError := "", ""
 	if executionErr != nil {
-		status, failureCode, lastError = taskmodel.StatusFailed, "lua_execution", executionErr.Error()
-		if errors.Is(executionErr, context.DeadlineExceeded) {
-			failureCode = "lua_timeout"
-		} else if errors.Is(executionErr, context.Canceled) {
-			if latest, getErr := repository.GetCrawlTask(ctx, crawlTask.ID); getErr == nil && latest.Cancelled {
-				status = taskmodel.StatusCancelled
-				failureCode = "cancelled"
-			}
-		}
+		status, failureCode, lastError = classifyExecutionError(ctx, crawlTask.ID, executionErr, func(c context.Context, id uint64) bool {
+			latest, getErr := repository.GetCrawlTask(c, id)
+			return getErr == nil && latest.Cancelled
+		})
 		processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageFailed, taskmodel.EventLevelError, failureCode, lastError)
 	} else {
-		processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageLuaFinished, taskmodel.EventLevelInfo, "lua_finished", "Lua 规则执行完成，结果等待事务提交")
+		processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageLuaFinished, taskmodel.EventLevelInfo, "connector_finished", "连接器执行完成，结果等待事务提交")
 	}
 	commitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
 	defer stop()
@@ -162,7 +158,39 @@ func (processor *Processor) process(ctx context.Context, message redis.XMessage,
 	return nil
 }
 
+func classifyExecutionError(
+	ctx context.Context,
+	taskID uint64,
+	err error,
+	isCancelled func(context.Context, uint64) bool,
+) (taskmodel.Status, string, string) {
+	msg := err.Error()
+	switch {
+	case errors.Is(err, pipeline.ErrSilentDrift):
+		return taskmodel.StatusFailed, "silent_drift", msg
+	case errors.Is(err, context.DeadlineExceeded):
+		return taskmodel.StatusFailed, "timeout", msg
+	case errors.Is(err, context.Canceled):
+		if isCancelled != nil && isCancelled(ctx, taskID) {
+			return taskmodel.StatusCancelled, "cancelled", msg
+		}
+		return taskmodel.StatusFailed, "cancelled", msg
+	}
+	var ge *fetchgov.GovernanceError
+	if errors.As(err, &ge) && strings.TrimSpace(ge.Code) != "" {
+		return taskmodel.StatusFailed, strings.ToLower(strings.TrimSpace(ge.Code)), msg
+	}
+	var pe *programrunner.Error
+	if errors.As(err, &pe) && strings.TrimSpace(pe.Code) != "" {
+		return taskmodel.StatusFailed, strings.ToLower(strings.TrimSpace(pe.Code)), msg
+	}
+	return taskmodel.StatusFailed, "execution_error", msg
+}
+
 func (processor *Processor) runExecution(ctx context.Context, task taskmodel.CrawlTask) (persist repository.PersistTaskResult, err error) {
+	if processor.execute == nil {
+		return nil, fmt.Errorf("task executor is not configured")
+	}
 	defer func() {
 		if value := recover(); value != nil {
 			persist = nil
@@ -194,7 +222,7 @@ func (processor *Processor) ProcessClaimedMessage(ctx context.Context, message r
 	return processor.process(ctx, message, true)
 }
 
-func (processor *Processor) renewExecution(ctx context.Context, cancel context.CancelFunc, taskID uint64, token string, lease time.Duration, runID string) func() error {
+func (processor *Processor) renewExecution(ctx context.Context, cancel context.CancelFunc, taskID uint64, token string, lease time.Duration) func() error {
 	stop := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
@@ -210,7 +238,7 @@ func (processor *Processor) renewExecution(ctx context.Context, cancel context.C
 				return
 			case <-ticker.C:
 				renewCtx, release := context.WithTimeout(ctx, min(5*time.Second, lease/3))
-				err := repository.RenewCrawlTaskLease(renewCtx, taskID, token, lease, runID)
+				err := repository.RenewCrawlTaskLease(renewCtx, taskID, token, lease)
 				release()
 				if err != nil {
 					cancel()

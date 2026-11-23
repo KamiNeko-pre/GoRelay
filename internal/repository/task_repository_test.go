@@ -38,7 +38,7 @@ func TestTransitionCrawlTaskCompareAndSet(t *testing.T) {
 	requestKey := fmt.Sprintf("integration-cas-%d", time.Now().UnixNano())
 	crawlTask := taskmodel.CrawlTask{
 		RequestKey: requestKey,
-		Target:     "integration_test",
+		SourceID:   "integration_test",
 		URL:        "https://example.com/tasks",
 		Status:     taskmodel.StatusQueued,
 	}

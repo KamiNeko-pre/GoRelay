@@ -3,6 +3,8 @@ package programrunner
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"gorelay/internal/acquisition"
 	"gorelay/internal/engine"
 	"gorelay/internal/fetchgov"
@@ -25,6 +27,7 @@ type Request struct {
 	CheckpointCallbackURL   string                          `json:"checkpoint_callback_url,omitempty"`
 	CheckpointCallbackToken string                          `json:"checkpoint_callback_token,omitempty"`
 }
+
 type Error struct {
 	AdmissionRejected bool                  `json:"-"`
 	Code              string                `json:"code"`
@@ -68,6 +71,55 @@ func (out *Response) RestoreSnapshotBodies(in Request) error {
 		evidence.Body = body
 	}
 	return nil
+}
+
+// RenderToResponse adapts a sidecar RenderResult into a standard acquisition.Response
+// so Lua scripts and downstream evidence archival treat rendered HTML identically to fetched HTML.
+func RenderToResponse(requestedURL string, res fetchgov.RenderResult) acquisition.Response {
+	finalURL := res.FinalURL
+	if finalURL == "" {
+		finalURL = requestedURL
+	}
+	return acquisition.Response{
+		Body: res.HTML,
+		Receipt: acquisition.Receipt{
+			Method:       "RENDER",
+			RequestedURL: requestedURL,
+			URL:          finalURL,
+			Status:       200,
+			Bytes:        int64(len(res.HTML)),
+			FetchedAt:    time.Now().UTC(),
+			Headers:      map[string]string{"content-type": "text/html; charset=utf-8"},
+		},
+	}
+}
+
+// RunWithHostIPC executes a Lua program with zero local sockets or credentials:
+// all HTTP fetches, browser renders, and checkpoint mutations are proxied to the
+// trusted host process via callbacks (for example over stdin/stdout IPC).
+func RunWithHostIPC(
+	ctx context.Context,
+	in Request,
+	requestFn engine.RequestFunc,
+	renderFn engine.RenderFunc,
+	cp *engine.CheckpointHooks,
+) (Response, error) {
+	result, err := engine.RunProgramWithExecutionHooks(ctx, in.Program, in.Limits, engine.ExecutionHooks{
+		Request:    requestFn,
+		Render:     renderFn,
+		Checkpoint: cp,
+	})
+	result.HTTPUsageKnown = true
+	out := Response{Result: &result}
+	if in.SnapshotReferences {
+		for index, evidence := range result.SourceEvidence {
+			if body, ok := in.savedEvidenceBody(index, evidence); ok && body != "" && body == evidence.Body {
+				out.OmittedBodies = append(out.OmittedBodies, index)
+				result.SourceEvidence[index].Body = ""
+			}
+		}
+	}
+	return out, err
 }
 
 func Run(ctx context.Context, in Request) (Response, error) {
@@ -115,52 +167,73 @@ func RunWithClient(ctx context.Context, in Request, lookup SnapshotLookup, cp *e
 		}
 	}
 
-	checked := map[string]bool{}
-	result, err := engine.RunProgramWithHooks(ctx, in.Program, limits, func(ctx context.Context, opts acquisition.RequestOptions) (acquisition.Response, error) {
-		if lookup != nil {
-			var missing []string
-			for _, key := range fetcher.SnapshotCandidates(ctx, opts) {
-				if !checked[key] {
-					missing = append(missing, key)
-				}
+	var renderFn engine.RenderFunc
+	if gov != nil {
+		renderFn = func(ctx context.Context, targetURL, waitSelector string) (acquisition.Response, error) {
+			res, rerr := gov.Render(ctx, fetchgov.RenderRequest{
+				URL:            targetURL,
+				WaitSelector:   waitSelector,
+				AllowedDomains: in.AllowedDomains,
+			})
+			if rerr != nil {
+				return acquisition.Response{}, rerr
 			}
-			if len(missing) > 0 {
-				entries, err := lookup(missing)
-				if err != nil {
-					return acquisition.Response{}, err
+			return RenderToResponse(targetURL, res), nil
+		}
+	}
+
+	checked := map[string]bool{}
+	result, err := engine.RunProgramWithExecutionHooks(ctx, in.Program, limits, engine.ExecutionHooks{
+		Request: func(ctx context.Context, opts acquisition.RequestOptions) (acquisition.Response, error) {
+			if lookup != nil {
+				var missing []string
+				for _, key := range fetcher.SnapshotCandidates(ctx, opts) {
+					if !checked[key] {
+						missing = append(missing, key)
+					}
 				}
-				if in.Snapshots == nil {
-					in.Snapshots = make(map[string]acquisition.Response)
-				}
-				for _, key := range missing {
-					checked[key] = true
-					if saved, ok := entries[key]; ok {
-						in.Snapshots[key] = saved
+				if len(missing) > 0 {
+					entries, err := lookup(missing)
+					if err != nil {
+						return acquisition.Response{}, err
+					}
+					if in.Snapshots == nil {
+						in.Snapshots = make(map[string]acquisition.Response)
+					}
+					for _, key := range missing {
+						checked[key] = true
+						if saved, ok := entries[key]; ok {
+							in.Snapshots[key] = saved
+						}
 					}
 				}
 			}
-		}
-		if len(in.Snapshots) > 0 {
-			for _, cand := range fetcher.SnapshotCandidates(ctx, opts) {
-				if _, ok := in.Snapshots[cand]; ok {
-					return fetcher.FetchWithSnapshots(ctx, opts, in.Snapshots)
+			if len(in.Snapshots) > 0 {
+				for _, cand := range fetcher.SnapshotCandidates(ctx, opts) {
+					if _, ok := in.Snapshots[cand]; ok {
+						return fetcher.FetchWithSnapshots(ctx, opts, in.Snapshots)
+					}
 				}
 			}
-		}
-		if gov != nil {
-			return gov.Fetch(ctx, fetchgov.FetchRequest{
-				URL:            opts.URL,
-				Method:         opts.Method,
-				Headers:        opts.Headers,
-				Body:           opts.Body,
-				AuthProfile:    in.AuthProfile,
-				AllowedDomains: in.AllowedDomains,
-			})
-		}
-		return fetcher.FetchWithSnapshots(ctx, opts, in.Snapshots)
-	}, cp)
-	// Production stats include actual HTTP attempts/redirect hops, even on failure.
-	result.Stats = fetcher.Stats()
+			if gov != nil {
+				return gov.Fetch(ctx, fetchgov.FetchRequest{
+					URL:            opts.URL,
+					Method:         opts.Method,
+					Headers:        opts.Headers,
+					Body:           opts.Body,
+					AuthProfile:    in.AuthProfile,
+					AllowedDomains: in.AllowedDomains,
+				})
+			}
+			return fetcher.FetchWithSnapshots(ctx, opts, in.Snapshots)
+		},
+		Render:     renderFn,
+		Checkpoint: cp,
+	})
+	if clientOverride == nil {
+		// Production stats include actual HTTP attempts/redirect hops, even on failure.
+		result.Stats = fetcher.Stats()
+	}
 	result.HTTPUsageKnown = true
 	out := Response{Result: &result}
 	if in.SnapshotReferences {

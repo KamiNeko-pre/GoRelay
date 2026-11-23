@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -57,6 +58,21 @@ func (b ConnectorBackend) ProbeSource(ctx context.Context, in ProbeSourceInput) 
 }
 
 func (b ConnectorBackend) DeployAndRun(ctx context.Context, in DeployAndRunInput) (ExecutionOutput, error) {
+	var inSchemaRaw, outSchemaRaw json.RawMessage
+	if len(in.InputSchema) > 0 {
+		raw, err := json.Marshal(in.InputSchema)
+		if err != nil {
+			return ExecutionOutput{}, &ToolFailure{Code: "INVALID_ARGUMENTS", Message: "invalid input_schema: " + err.Error(), RecoverySteps: defaultRecovery["gorelay_deploy_and_run"]}
+		}
+		inSchemaRaw = raw
+	}
+	if len(in.OutputSchema) > 0 {
+		raw, err := json.Marshal(in.OutputSchema)
+		if err != nil {
+			return ExecutionOutput{}, &ToolFailure{Code: "INVALID_ARGUMENTS", Message: "invalid output_schema: " + err.Error(), RecoverySteps: defaultRecovery["gorelay_deploy_and_run"]}
+		}
+		outSchemaRaw = raw
+	}
 	res, err := b.Service.DeployAndRun(ctx, connector.DeployAndRunInput{
 		SourceID:     in.SourceID,
 		Kind:         in.Kind,
@@ -64,8 +80,8 @@ func (b ConnectorBackend) DeployAndRun(ctx context.Context, in DeployAndRunInput
 		Description:  in.Description,
 		TargetURL:    in.TargetURL,
 		SpecOrCode:   in.SpecOrCode,
-		InputSchema:  in.InputSchema,
-		OutputSchema: in.OutputSchema,
+		InputSchema:  inSchemaRaw,
+		OutputSchema: outSchemaRaw,
 		Params:       in.Params,
 		AuthProfile:  in.AuthProfile,
 		WaitMS:       in.WaitMS,

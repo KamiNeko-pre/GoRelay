@@ -117,6 +117,20 @@ func TestMCPV2SixToolsContractAndRecovery(t *testing.T) {
 		t.Fatalf("missing structured recovery error: %s", rawBad)
 	}
 
+	// Valid deploy_and_run with JSON object output_schema passes MCP schema validation.
+	okRes, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "gorelay_deploy_and_run",
+		Arguments: map[string]any{
+			"source_id":     "github_go_releases",
+			"executor":      connector.ExecutorHTTPAPI,
+			"spec_or_code":  `{"url_template":"https://api.github.com/repos/golang/go/releases"}`,
+			"output_schema": map[string]any{"entity_keys": []string{"id"}, "fields": []map[string]any{{"name": "id", "type": "string", "required": true}}},
+		},
+	})
+	if err != nil || okRes.IsError {
+		t.Fatalf("valid deploy_and_run rejected by MCP schema: res=%v err=%v", okRes, err)
+	}
+
 	// SearchEvidence propagates base URL properly.
 	evRes, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      "gorelay_search_evidence",
