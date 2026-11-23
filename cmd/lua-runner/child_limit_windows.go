@@ -6,10 +6,26 @@ import (
 	"fmt"
 	"golang.org/x/sys/windows"
 	"os"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 )
+
+func prepareChildCmd(cmd *exec.Cmd) {
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
+}
+
+func killProcessTree(cmd *exec.Cmd) {
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+}
 
 const jobMessageProcessMemoryLimit = 9
 
@@ -96,6 +112,7 @@ func (g *windowsChildIsolation) watch() {
 }
 func (g *windowsChildIsolation) Close() {
 	g.closeOnce.Do(func() {
+		_ = windows.TerminateJobObject(g.job, 1)
 		_ = windows.CloseHandle(g.job)
 		// Drain already queued resource notifications before the stop marker.
 		err := windows.PostQueuedCompletionStatus(g.port, 0, 0, nil)

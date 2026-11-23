@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	taskmodel "go-lua-crawler/internal/task"
+	taskmodel "gorelay/internal/task"
 )
 
 func TestRecordTaskEventValidatesInputBeforeDatabase(t *testing.T) {

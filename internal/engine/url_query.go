@@ -2,7 +2,7 @@ package engine
 
 import (
 	lua "github.com/yuin/gopher-lua"
-	"go-lua-crawler/internal/acquisition"
+	"gorelay/internal/acquisition"
 )
 
 func URLQueryValue(L *lua.LState) int {

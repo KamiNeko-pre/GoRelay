@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	taskmodel "go-lua-crawler/internal/task"
-	"go-lua-crawler/internal/testdb"
+	taskmodel "gorelay/internal/task"
+	"gorelay/internal/testdb"
 )
 
 func TestTransitionCrawlTaskRejectsInvalidTransitionBeforeDatabase(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"go-lua-crawler/internal/programrunner"
+	"gorelay/internal/programrunner"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,9 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"go-lua-crawler/internal/acquisition"
-	"go-lua-crawler/internal/aiapp"
-	"go-lua-crawler/internal/engine"
+	"gorelay/internal/acquisition"
+	"gorelay/internal/engine"
 )
 
 func TestRunnerHTTPAuthAndHostBudgetCaps(t *testing.T) {
@@ -103,7 +102,7 @@ func TestRunnerReusesExactEvidenceWithoutReturningItsBody(t *testing.T) {
 		_, _ = w.Write(out.Body.Bytes())
 	}))
 	defer server.Close()
-	client, err := aiapp.NewRunnerClient(server.URL, "key")
+	client, err := programrunner.NewRunnerClient(server.URL, "key")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +232,7 @@ func TestRunnerClientSetsSnapshotReferencesBeforeMarshal(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(programrunner.Response{Result: &engine.ProgramResult{Collection: map[string]any{"items": []any{}}}})
 	}))
 	defer server.Close()
-	client, err := aiapp.NewRunnerClient(server.URL, "key")
+	client, err := programrunner.NewRunnerClient(server.URL, "key")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,5 +245,58 @@ func TestRunnerClientSetsSnapshotReferencesBeforeMarshal(t *testing.T) {
 	}
 	if !seenJSONFlag {
 		t.Fatal("expected SnapshotReferences=true in initial marshaled request JSON")
+	}
+}
+
+func TestCheckpointPipeRoundTripWithChildProcess(t *testing.T) {
+	var cur any = map[string]any{"next_page": 5}
+	var saved [][]map[string]any
+	cp := &engine.CheckpointHooks{
+		Get: func(context.Context) (any, error) { return cur, nil },
+		Save: func(_ context.Context, cursor any, records []map[string]any, _ []acquisition.Response) error {
+			cur = cursor
+			saved = append(saved, records)
+			return nil
+		},
+	}
+
+	req := programrunner.Request{
+		HasCheckpoint: true,
+		Program: engine.ProgramRequest{
+			Code: `
+local cp = checkpoint.get()
+checkpoint.save({next_page = cp.next_page + 1}, {{id = "p5", url = "https://example.com/5"}})
+return true, {items = {{id = "p5", url = "https://example.com/5"}}}
+`,
+		},
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	childErr := make(chan error, 1)
+	go func() {
+		defer outW.Close()
+		defer inR.Close()
+		childErr <- runSnapshotChild(inR, outW)
+	}()
+
+	resp, err := exchangeChildPipe(context.Background(), inW, outR, payload, nil, 0, cp)
+	_ = inW.Close()
+	_ = outR.Close()
+	if err != nil {
+		t.Fatalf("exchangeChildPipe failed: %v", err)
+	}
+	if ce := <-childErr; ce != nil {
+		t.Fatalf("runSnapshotChild failed: %v", ce)
+	}
+	if resp.Result == nil || len(saved) != 1 || saved[0][0]["id"] != "p5" {
+		t.Fatalf("unexpected checkpoint pipe result: resp=%+v saved=%+v", resp, saved)
+	}
+	if m, ok := cur.(map[string]any); !ok || m["next_page"] != float64(6) {
+		t.Fatalf("expected updated cursor next_page=6, got %#v", cur)
 	}
 }

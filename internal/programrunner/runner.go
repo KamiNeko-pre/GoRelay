@@ -3,8 +3,9 @@ package programrunner
 import (
 	"context"
 	"fmt"
-	"go-lua-crawler/internal/acquisition"
-	"go-lua-crawler/internal/engine"
+	"gorelay/internal/acquisition"
+	"gorelay/internal/engine"
+	"gorelay/internal/fetchgov"
 )
 
 const SnapshotReferencesHeader = "X-GoRelay-Snapshot-References"
@@ -13,11 +14,16 @@ const SnapshotBatchHeader = "X-GoRelay-Snapshot-Batch"
 type SnapshotLookup func([]string) (map[string]acquisition.Response, error)
 
 type Request struct {
-	Program            engine.ProgramRequest           `json:"program"`
-	Limits             engine.ProgramLimits            `json:"limits"`
-	AllowedDomains     []string                        `json:"allowed_domains,omitempty"`
-	Snapshots          map[string]acquisition.Response `json:"snapshots,omitempty"`
-	SnapshotReferences bool                            `json:"snapshot_references,omitempty"`
+	Program                 engine.ProgramRequest           `json:"program"`
+	Limits                  engine.ProgramLimits            `json:"limits"`
+	AllowedDomains          []string                        `json:"allowed_domains,omitempty"`
+	Snapshots               map[string]acquisition.Response `json:"snapshots,omitempty"`
+	SnapshotReferences      bool                            `json:"snapshot_references,omitempty"`
+	AuthProfile             string                          `json:"auth_profile,omitempty"`
+	RespectRobots           bool                            `json:"respect_robots,omitempty"`
+	HasCheckpoint           bool                            `json:"has_checkpoint,omitempty"`
+	CheckpointCallbackURL   string                          `json:"checkpoint_callback_url,omitempty"`
+	CheckpointCallbackToken string                          `json:"checkpoint_callback_token,omitempty"`
 }
 type Error struct {
 	AdmissionRejected bool                  `json:"-"`
@@ -65,22 +71,52 @@ func (out *Response) RestoreSnapshotBodies(in Request) error {
 }
 
 func Run(ctx context.Context, in Request) (Response, error) {
-	return RunWithSnapshotLookup(ctx, in, nil)
+	return RunWithHooks(ctx, in, nil, nil)
 }
 
 func RunWithSnapshotLookup(ctx context.Context, in Request, lookup SnapshotLookup) (Response, error) {
+	return RunWithHooks(ctx, in, lookup, nil)
+}
+
+func RunWithHooks(ctx context.Context, in Request, lookup SnapshotLookup, cp *engine.CheckpointHooks) (Response, error) {
+	return RunWithClient(ctx, in, lookup, cp, nil)
+}
+
+func RunWithClient(ctx context.Context, in Request, lookup SnapshotLookup, cp *engine.CheckpointHooks, clientOverride *fetchgov.SafeClient) (Response, error) {
 	limits := in.Limits
 	maxBody := acquisition.ConfiguredMaxResponseBytes()
-	if limits.MaxBytes > 0 && (maxBody <= 0 || limits.MaxBytes < maxBody) {
+	if maxBody <= 0 || maxBody > fetchgov.DefaultMaxBodyBytes {
+		maxBody = fetchgov.DefaultMaxBodyBytes
+	}
+	if limits.MaxBytes > 0 && limits.MaxBytes < maxBody {
 		maxBody = limits.MaxBytes
 	}
-	fetcher, err := acquisition.NewPublicFetcher(acquisition.Policy{AllowedDomains: in.AllowedDomains, Timeout: limits.Timeout, MaxBodyBytes: maxBody})
+	pol := acquisition.Policy{AllowedDomains: in.AllowedDomains, Timeout: limits.Timeout, MaxBodyBytes: maxBody}
+	fetcher, err := acquisition.NewPublicFetcher(pol)
 	if err != nil {
 		return Response{}, err
 	}
 	defer fetcher.Close()
+
+	var gov *fetchgov.SafeClient
+	if clientOverride != nil {
+		gov = clientOverride
+	} else if in.RespectRobots || in.AuthProfile != "" {
+		cfg := fetchgov.DefaultConfig()
+		cfg.Policy = pol
+		cfg.MaxBodyBytes = maxBody
+		cfg.RespectRobots = in.RespectRobots
+		cfg.RequesterFactory = func(acquisition.Policy) (fetchgov.Requester, error) {
+			return &noCloseRequester{fetcher}, nil
+		}
+		gov, err = fetchgov.NewSafeClient(cfg)
+		if err != nil {
+			return Response{}, err
+		}
+	}
+
 	checked := map[string]bool{}
-	result, err := engine.RunProgramWithRequester(ctx, in.Program, limits, func(ctx context.Context, opts acquisition.RequestOptions) (acquisition.Response, error) {
+	result, err := engine.RunProgramWithHooks(ctx, in.Program, limits, func(ctx context.Context, opts acquisition.RequestOptions) (acquisition.Response, error) {
 		if lookup != nil {
 			var missing []string
 			for _, key := range fetcher.SnapshotCandidates(ctx, opts) {
@@ -104,8 +140,25 @@ func RunWithSnapshotLookup(ctx context.Context, in Request, lookup SnapshotLooku
 				}
 			}
 		}
+		if len(in.Snapshots) > 0 {
+			for _, cand := range fetcher.SnapshotCandidates(ctx, opts) {
+				if _, ok := in.Snapshots[cand]; ok {
+					return fetcher.FetchWithSnapshots(ctx, opts, in.Snapshots)
+				}
+			}
+		}
+		if gov != nil {
+			return gov.Fetch(ctx, fetchgov.FetchRequest{
+				URL:            opts.URL,
+				Method:         opts.Method,
+				Headers:        opts.Headers,
+				Body:           opts.Body,
+				AuthProfile:    in.AuthProfile,
+				AllowedDomains: in.AllowedDomains,
+			})
+		}
 		return fetcher.FetchWithSnapshots(ctx, opts, in.Snapshots)
-	})
+	}, cp)
 	// Production stats include actual HTTP attempts/redirect hops, even on failure.
 	result.Stats = fetcher.Stats()
 	result.HTTPUsageKnown = true
@@ -120,3 +173,7 @@ func RunWithSnapshotLookup(ctx context.Context, in Request, lookup SnapshotLooku
 	}
 	return out, err
 }
+
+type noCloseRequester struct{ *acquisition.PublicFetcher }
+
+func (noCloseRequester) Close() {}

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"go-lua-crawler/internal/analysis"
-	taskmodel "go-lua-crawler/internal/task"
+	"gorelay/internal/analysis"
+	taskmodel "gorelay/internal/task"
 )
 
 const maxAnalysisSnapshotLimit = 200

@@ -4,19 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
-	"go-lua-crawler/internal/aiapp"
-	"go-lua-crawler/internal/config"
-	"go-lua-crawler/internal/logger"
-	"go-lua-crawler/internal/queue"
-	"go-lua-crawler/internal/repository"
-	"go-lua-crawler/internal/worker"
-
 	"go.uber.org/zap"
+	"gorm.io/gorm"
+	"gorelay/internal/config"
+	"gorelay/internal/connector"
+	"gorelay/internal/fetchgov"
+	"gorelay/internal/logger"
+	"gorelay/internal/pipeline"
+	"gorelay/internal/queue"
+	"gorelay/internal/repository"
+	"gorelay/internal/worker"
 )
 
 func main() {
@@ -37,6 +41,12 @@ func run(ctx context.Context) error {
 		}
 	}()
 
+	repository.ExtraMigrator = func(db *gorm.DB) error {
+		if err := pipeline.Migrate(db); err != nil {
+			return err
+		}
+		return connector.Migrate(db)
+	}
 	if err := repository.InitDB(); err != nil {
 		return fmt.Errorf("initialize MySQL: %w", err)
 	}
@@ -45,11 +55,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer sqlDB.Close()
-	ai := aiapp.NewService(repository.DB)
-	if err := ai.Migrate(); err != nil {
-		return err
-	}
-	ai.Configure()
+
 	startPprofServer(config.Get().App.PprofPort)
 	if err := queue.InitClient(ctx); err != nil {
 		return fmt.Errorf("initialize Redis: %w", err)
@@ -61,6 +67,41 @@ func run(ctx context.Context) error {
 	}()
 	if err := queue.EnsureConsumerGroup(ctx); err != nil {
 		return fmt.Errorf("ensure Redis consumer group: %w", err)
+	}
+
+	govCfg := fetchgov.DefaultConfig()
+	govCfg.RespectRobots = !strings.EqualFold(os.Getenv("GORELAY_RESPECT_ROBOTS"), "false")
+	safeClient, err := fetchgov.NewSafeClient(govCfg)
+	if err != nil {
+		return fmt.Errorf("init SafeClient: %w", err)
+	}
+	defer safeClient.Close()
+
+	snapDir := strings.TrimSpace(os.Getenv("GORELAY_SNAPSHOT_DIR"))
+	connSvc, err := connector.NewService(repository.DB, safeClient, pipeline.NewStore(repository.DB, snapDir), connector.ServiceConfig{
+		RunnerURL:         strings.TrimSpace(os.Getenv("GORELAY_RUNNER_URL")),
+		RunnerToken:       strings.TrimSpace(os.Getenv("GORELAY_RUNNER_TOKEN")),
+		CheckpointBaseURL: strings.TrimSpace(os.Getenv("GORELAY_CHECKPOINT_BASE_URL")),
+		RespectRobots:     govCfg.RespectRobots,
+		SnapshotDir:       snapDir,
+	})
+	if err != nil {
+		return fmt.Errorf("init connector service: %w", err)
+	}
+
+	if cpListen := strings.TrimSpace(os.Getenv("GORELAY_CHECKPOINT_LISTEN")); cpListen != "" {
+		cpSrv := &http.Server{Addr: cpListen, Handler: connSvc.Hub, ReadHeaderTimeout: 5 * time.Second}
+		go func() {
+			<-ctx.Done()
+			cctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = cpSrv.Shutdown(cctx)
+		}()
+		go func() {
+			if err := cpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Log.Error("checkpoint callback server exited", zap.Error(err))
+			}
+		}()
 	}
 
 	cfg := config.Get()
@@ -79,7 +120,7 @@ func run(ctx context.Context) error {
 		workerConfig.ExecutionTimeout = time.Duration(cfg.Engine.LuaTimeout) * time.Second
 		workerConfig.ClaimMinIdle = time.Duration(cfg.Redis.ClaimMinIdleMS) * time.Millisecond
 		workerConfig.ClaimInterval = time.Duration(cfg.Redis.ClaimIntervalMS) * time.Millisecond
-		processor, err := worker.NewProcessor(queue.Client, workerConfig, ai.ExecuteTask)
+		processor, err := worker.NewProcessor(queue.Client, workerConfig, connSvc.ExecuteConnectorTask)
 		if err != nil {
 			return fmt.Errorf("create processor: %w", err)
 		}
@@ -91,25 +132,29 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("create reclaimer: %w", err)
 		}
-		service, err := worker.NewService(consumer, reclaimer)
+		svc, err := worker.NewService(consumer, reclaimer)
 		if err != nil {
 			return fmt.Errorf("create worker service: %w", err)
 		}
+		go func() {
+			done <- svc.Run(child)
+		}()
+	}
 
-		go func() { done <- service.Run(child) }()
+	var firstErr error
+	for i := 0; i < cfg.Engine.WorkerCount; i++ {
+		if err := <-done; err != nil && firstErr == nil {
+			firstErr = err
+			cancel()
+		}
 	}
-	first := <-done
-	cancel()
-	for i := 1; i < cfg.Engine.WorkerCount; i++ {
-		<-done
-	}
-	return first
+	return firstErr
 }
 
 func consumerName() string {
-	hostname, err := os.Hostname()
-	if err != nil || hostname == "" {
-		hostname = "unknown-host"
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return "worker"
 	}
-	return fmt.Sprintf("%s-%d", hostname, os.Getpid())
+	return host
 }

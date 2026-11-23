@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"go-lua-crawler/internal/analysis"
+	"gorelay/internal/analysis"
 
 	yaml "go.yaml.in/yaml/v3"
 )

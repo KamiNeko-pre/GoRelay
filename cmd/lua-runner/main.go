@@ -10,7 +10,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"go-lua-crawler/internal/programrunner"
 	"io"
 	"log"
 	"net/http"
@@ -22,10 +21,10 @@ import (
 	"syscall"
 	"time"
 
-	"go-lua-crawler/internal/acquisition"
-	"go-lua-crawler/internal/agentdata"
-
-	"go-lua-crawler/internal/engine"
+	"gorelay/internal/acquisition"
+	"gorelay/internal/contract"
+	"gorelay/internal/engine"
+	"gorelay/internal/programrunner"
 )
 
 var errChildMemoryBudget = errors.New("process memory budget exceeded")
@@ -203,7 +202,7 @@ func runnerHandler(token string, limits engine.ProgramLimits, execute func(conte
 			return
 		}
 		_ = controller.SetWriteDeadline(time.Time{})
-		id := agentdata.Token()
+		id := contract.RandomToken()
 		batchesMu.Lock()
 		batches[id] = snapshots
 		batchesMu.Unlock()
@@ -292,19 +291,28 @@ func executeChild(parent context.Context, in programrunner.Request) (programrunn
 		ctx, deadlineCancel = context.WithTimeout(ctx, in.Limits.Timeout+2*time.Second)
 		defer deadlineCancel()
 	}
-	// The input map stays in the parent. The isolated child requests only
-	// snapshots whose effective HTTP keys it actually encounters.
+	// The input map and checkpoint credentials stay in the parent. The isolated
+	// child only signals pipe frames without touching DB/Redis/callback secrets.
 	snapshots := in.Snapshots
 	in.Snapshots = nil
+	cbURL := in.CheckpointCallbackURL
+	cbToken := in.CheckpointCallbackToken
+	in.CheckpointCallbackURL = ""
+	in.CheckpointCallbackToken = ""
+	usePipe := len(snapshots) > 0 || cbURL != "" || in.HasCheckpoint
+	if usePipe && cbURL != "" {
+		in.HasCheckpoint = true
+	}
 	payload, err := json.Marshal(in)
 	if err != nil {
 		return out, err
 	}
 	args := []string{"-child"}
-	if len(snapshots) > 0 {
+	if usePipe {
 		args = append(args, "-snapshot-pipe")
 	}
 	cmd := exec.CommandContext(ctx, executable, args...)
+	prepareChildCmd(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return out, err
@@ -327,7 +335,7 @@ func executeChild(parent context.Context, in programrunner.Request) (programrunn
 	stdout := &boundedBuffer{limit: int(programrunner.ResponseByteLimit(in.Limits))}
 	stderr := &boundedBuffer{limit: 4096}
 	var snapshotOutput io.ReadCloser
-	if len(snapshots) > 0 {
+	if usePipe {
 		snapshotOutput, err = cmd.StdoutPipe()
 		if err != nil {
 			_ = stdin.Close()
@@ -345,20 +353,21 @@ func executeChild(parent context.Context, in programrunner.Request) (programrunn
 	isolation, limitErr := isolateChild(cmd.Process, memoryBytes)
 	if limitErr != nil {
 		stdin.Close()
-		_ = cmd.Process.Kill()
+		killProcessTree(cmd)
 		_ = cmd.Wait()
 		return out, fmt.Errorf("child isolation unavailable: %w", limitErr)
 	}
 	defer isolation.Close()
 	var protocolErr error
 	if snapshotOutput != nil {
-		out, protocolErr = exchangeChildSnapshots(stdin, snapshotOutput, payload, snapshots, programrunner.ResponseByteLimit(in.Limits))
+		cpHooks := makeHTTPCallbackHooks(cbURL, cbToken)
+		out, protocolErr = exchangeChildPipe(ctx, stdin, snapshotOutput, payload, snapshots, programrunner.ResponseByteLimit(in.Limits), cpHooks)
 	} else {
 		_, protocolErr = stdin.Write(payload)
 	}
 	_ = stdin.Close()
 	if protocolErr != nil {
-		_ = cmd.Process.Kill()
+		killProcessTree(cmd)
 		_ = cmd.Wait()
 		if ctx.Err() != nil {
 			return out, ctx.Err()

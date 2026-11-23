@@ -1,146 +1,89 @@
 package mcpserver
 
 import (
-	"time"
+	"encoding/json"
 
-	"go-lua-crawler/internal/knowledge"
+	"gorelay/internal/connector"
+	"gorelay/internal/pipeline"
+	"gorelay/internal/probe"
 )
 
-type SourceQuery struct {
-	View     string `json:"view,omitempty" form:"view" jsonschema:"Optional catalog view: saved (has local documents), reusable (can collect again), or discovered (candidate URLs). Omit for all sources."`
-	Query    string `json:"query,omitempty" form:"query" jsonschema:"Source name or topic keywords; omit to browse saved sources"`
-	Cursor   string `json:"cursor,omitempty" form:"cursor" jsonschema:"next_cursor from the preceding catalog page"`
-	PageSize int    `json:"page_size,omitempty" form:"page_size" jsonschema:"Results per page; omitted means 20, and next_cursor exposes the remainder"`
+const ContractVersion = "2"
+
+type ToolFailure struct {
+	Code          string         `json:"code"`
+	Message       string         `json:"message"`
+	RecoverySteps []string       `json:"recovery_steps"`
+	Details       map[string]any `json:"details,omitempty"`
 }
 
-type DeliveryQuery struct {
-	Query    string `json:"query,omitempty" form:"query" jsonschema:"Keywords from the original task. Omit to browse saved reports and comparison tables."`
-	Cursor   string `json:"cursor,omitempty" form:"cursor" jsonschema:"next_cursor returned by the preceding delivery page"`
-	PageSize int    `json:"page_size,omitempty" form:"page_size" jsonschema:"Entries per page; omitted means 20, with the remainder available through next_cursor"`
+func (f *ToolFailure) Error() string { return f.Message }
+
+type ToolReply[T any] struct {
+	SchemaVersion string       `json:"schema_version"`
+	Data          *T           `json:"data,omitempty"`
+	Error         *ToolFailure `json:"error,omitempty"`
 }
 
-type DeliveryID struct {
-	ID string `json:"delivery_id" jsonschema:"Exact delivery_id returned by gorelay_find_deliveries or a completed GoRelay task"`
+type ListSourcesInput struct {
+	Domain          string `json:"domain,omitempty" jsonschema:"Exact hostname filter, e.g. api.github.com."`
+	URL             string `json:"url,omitempty" jsonschema:"Optional target URL whose domain will be extracted for matching."`
+	Keyword         string `json:"keyword,omitempty" jsonschema:"Optional deterministic substring filter across source_id, description, and url_pattern."`
+	Kind            string `json:"kind,omitempty" jsonschema:"Filter by connector kind: data or discovery."`
+	FreshnessTTLSec int    `json:"freshness_ttl_sec,omitempty" jsonschema:"Optional freshness threshold in seconds; marks fresh_cache_available if verified within TTL."`
+	Cursor          string `json:"cursor,omitempty" jsonschema:"next_cursor from the previous page."`
+	PageSize        int    `json:"page_size,omitempty" jsonschema:"Connectors per page (default 20, max 50)."`
 }
 
-type DeliveryEntry struct {
-	ID         string    `json:"delivery_id"`
-	RequestID  string    `json:"request_id"`
-	Goal       string    `json:"goal"`
-	Outcome    string    `json:"outcome"`
-	BaselineID string    `json:"baseline_delivery_id,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+type ListSourcesOutput = connector.ListSourcesPage
+
+type ProbeSourceInput struct {
+	URL         string `json:"url" jsonschema:"Public HTTP(S) target URL to probe."`
+	DetectAPI   bool   `json:"detect_api,omitempty" jsonschema:"Inspect JSON endpoints, embedded HTML JSON, and optional XHR API captures before falling back to DOM selectors."`
+	UseBrowser  string `json:"use_browser,omitempty" jsonschema:"Optional dynamic rendering policy: auto (default), always, or never."`
+	AuthProfile string `json:"auth_profile,omitempty" jsonschema:"Optional configured auth_profile name allowed for this domain."`
 }
 
-type DeliveryPage struct {
-	Deliveries []DeliveryEntry `json:"deliveries"`
-	Total      int64           `json:"total"`
-	NextCursor string          `json:"next_cursor,omitempty"`
+type ProbeSourceOutput = probe.ProbeResult
+
+type DeployAndRunInput struct {
+	SourceID     string          `json:"source_id" jsonschema:"Stable semantic connector ID, e.g. github_go_releases."`
+	Kind         string          `json:"kind,omitempty" jsonschema:"data (default) or discovery (recursive URL discovery subtasks)."`
+	Executor     string          `json:"executor" jsonschema:"http_api (declarative JSON API without Lua) or lua_sandbox (gopher-lua script)."`
+	Description  string          `json:"description,omitempty" jsonschema:"Concise description of what this connector retrieves and outputs."`
+	TargetURL    string          `json:"target_url,omitempty" jsonschema:"Target public URL (optional for http_api if url_template includes host)."`
+	SpecOrCode   string          `json:"spec_or_code" jsonschema:"JSON APISpec string for executor=http_api, or complete Lua program for executor=lua_sandbox."`
+	InputSchema  json.RawMessage `json:"input_schema,omitempty" jsonschema:"Optional JSON object schema for params; inferred from params when omitted."`
+	OutputSchema json.RawMessage `json:"output_schema" jsonschema:"Output schema JSON: {fields:[{name,type,required}], entity_keys:[...], min_rows}."`
+	Params       map[string]any  `json:"params,omitempty" jsonschema:"Runtime parameters passed to URL template placeholders or Lua PARAMS."`
+	AuthProfile  string          `json:"auth_profile,omitempty" jsonschema:"Optional auth_profile name for authorized endpoints."`
+	WaitMS       int             `json:"wait_ms,omitempty" jsonschema:"Milliseconds to wait for synchronous fast-path completion (e.g. 3000) before returning job_id."`
+	RollbackTo   int             `json:"rollback_to,omitempty" jsonschema:"Optional previous version integer to restore active pointer immediately instead of deploying new code."`
 }
 
-type Source struct {
-	Title           string         `json:"title,omitempty"`
-	ID              string         `json:"source_id"`
-	Kind            string         `json:"kind"`
-	Role            string         `json:"role,omitempty"`
-	State           string         `json:"state,omitempty"`
-	Description     string         `json:"description"`
-	EntryURL        string         `json:"entry_url,omitempty"`
-	Version         string         `json:"version,omitempty"`
-	InputSchema     map[string]any `json:"input_schema,omitempty"`
-	InputExample    map[string]any `json:"input_example,omitempty"`
-	OutputSchema    map[string]any `json:"output_schema,omitempty"`
-	CanExecute      bool           `json:"can_execute"`
-	SavedDocuments  int            `json:"saved_documents"`
-	LatestCaptureAt *time.Time     `json:"latest_capture_at,omitempty"`
-	Issue           string         `json:"issue,omitempty"`
+type RunConnectorInput struct {
+	SourceID        string         `json:"source_id" jsonschema:"Published connector source_id from gorelay_list_sources."`
+	TargetURL       string         `json:"target_url,omitempty" jsonschema:"Optional URL override matching the connector target."`
+	Params          map[string]any `json:"params,omitempty" jsonschema:"Parameters satisfying the connector input_schema."`
+	FreshnessTTLSec int            `json:"freshness_ttl_sec,omitempty" jsonschema:"Return cached records with 0 network calls if verified within TTL seconds."`
+	WaitMS          int            `json:"wait_ms,omitempty" jsonschema:"Short wait budget in ms to return cleaned JSON in one step if job finishes quickly."`
+	ForceRefresh    bool           `json:"force_refresh,omitempty" jsonschema:"Bypass freshness cache and enqueue a fresh run."`
 }
 
-type SourcePage struct {
-	Counts     map[string]int `json:"counts,omitempty"`
-	Sources    []Source       `json:"sources"`
-	Discovery  []Source       `json:"discovery_capabilities,omitempty"`
-	Total      int            `json:"total_sources"`
-	NextCursor string         `json:"next_cursor,omitempty"`
+type ExecutionOutput = connector.ExecutionResponse
+
+type JobDataInput struct {
+	JobID  uint64 `json:"job_id" jsonschema:"Durable job_id returned by gorelay_deploy_and_run or gorelay_run_connector."`
+	Cursor string `json:"cursor,omitempty" jsonschema:"Pagination cursor returned in data.next_cursor."`
+	Cancel bool   `json:"cancel,omitempty" jsonschema:"Set true to cancel an in-flight job and terminate its sandbox process."`
 }
 
-type EvidenceInput struct {
-	Query       string   `json:"query" jsonschema:"The fact, topic or version-specific question to find evidence for"`
-	SourceIDs   []string `json:"source_ids,omitempty" jsonschema:"Optional saved source IDs from the catalog"`
-	DocumentIDs []string `json:"document_ids,omitempty" jsonschema:"Optional document IDs from earlier evidence results"`
-	Cursor      string   `json:"cursor,omitempty" jsonschema:"Use the returned next_cursor without changing the query or scope"`
-	PageSize    int      `json:"page_size,omitempty" jsonschema:"Passages per page; omitted means 20"`
+type SearchEvidenceInput struct {
+	SourceIDs   []string `json:"source_ids,omitempty" jsonschema:"Explicit connector source_ids to restrict BM25 search over archived snapshots."`
+	Query       string   `json:"query,omitempty" jsonschema:"Search keywords for BM25 passage ranking inside source_ids."`
+	SnapshotRef string   `json:"snapshot_ref,omitempty" jsonschema:"Exact SHA-256 snapshot_ref to read paginated archived text directly."`
+	Cursor      string   `json:"cursor,omitempty" jsonschema:"Pagination cursor returned in next_cursor."`
+	PageSize    int      `json:"page_size,omitempty" jsonschema:"Number of hits per page (default 10, max 20)."`
 }
 
-type EvidenceIDs struct {
-	IDs        []string `json:"evidence_ids,omitempty" jsonschema:"Actual evidence IDs from evidence results. Alternatively provide document_id and revision from a saved data row."`
-	DocumentID string   `json:"document_id,omitempty" jsonschema:"doc_id from evidence_documents; read together with its exact revision instead of evidence_ids."`
-	Revision   string   `json:"revision,omitempty"`
-	Cursor     string   `json:"cursor,omitempty"`
-	PageSize   int      `json:"page_size,omitempty"`
-}
-
-type CitedEvidence struct {
-	knowledge.EvidenceSnapshot
-	SnapshotURL string `json:"snapshot_url"`
-}
-
-type EvidenceResult struct {
-	Entries        []CitedEvidence `json:"entries"`
-	Total          int             `json:"total_passages"`
-	CorpusRevision string          `json:"corpus_revision,omitempty"`
-	NextCursor     string          `json:"next_cursor,omitempty"`
-}
-
-type DataInput struct {
-	SourceID string `json:"source_id,omitempty" form:"source_id" jsonschema:"Source ID returned by gorelay_find_sources"`
-	JobID    string `json:"job_id,omitempty" form:"job_id" jsonschema:"An existing acquisition run ID; narrows rows to that job"`
-	Cursor   string `json:"cursor,omitempty" form:"cursor" jsonschema:"The next_cursor from the preceding data page"`
-	PageSize int    `json:"page_size,omitempty" form:"page_size" jsonschema:"Rows per page; omitted means 20 with all remaining rows available via next_cursor"`
-}
-
-type DocumentReference struct {
-	ID          string     `json:"doc_id"`
-	Revision    string     `json:"revision"`
-	URL         string     `json:"url"`
-	SnapshotURL string     `json:"snapshot_url" jsonschema:"Open this exact saved document revision; usable in ordinary Markdown citations."`
-	Origin      string     `json:"origin"`
-	FetchedAt   *time.Time `json:"fetched_at,omitempty"`
-}
-
-type FieldSupport struct {
-	Status         string         `json:"status" jsonschema:"supported means a mechanical match to captured source content, not a semantic truth guarantee."`
-	DiagnosticCode string         `json:"diagnostic_code,omitempty"`
-	ActualLocator  map[string]any `json:"actual_locator,omitempty" jsonschema:"DOM selector, JSON pointer or declared source-backed calculation used to check this field."`
-	SourceDigest   string         `json:"source_digest,omitempty"`
-	SourceDigests  []string       `json:"source_digests,omitempty"`
-	FullSource     bool           `json:"full_source,omitempty"`
-	CheckerVersion string         `json:"checker_version"`
-	EvidenceRefs   []string       `json:"evidence_refs" jsonschema:"Source-locator references only. These are not evidence IDs accepted by gorelay_read_evidence; find quotable passages using evidence_documents."`
-	Reason         string         `json:"reason,omitempty"`
-}
-
-type RecordProvenance struct {
-	SourceID     string                  `json:"source_id"`
-	URL          string                  `json:"url"`
-	FetchedAt    *time.Time              `json:"fetched_at,omitempty" jsonschema:"Actual source acquisition time, never the time this saved row was read."`
-	PublishedAt  *time.Time              `json:"published_at,omitempty"`
-	DataVersion  string                  `json:"data_version" jsonschema:"Source program version. This does not prove current source content or freshness."`
-	TaskID       uint64                  `json:"task_id"`
-	FieldSupport map[string]FieldSupport `json:"field_support,omitempty"`
-}
-
-type DataRecord struct {
-	Key           string              `json:"key"`
-	SchemaVersion string              `json:"schema_version"`
-	Fields        map[string]any      `json:"fields"`
-	Provenance    RecordProvenance    `json:"provenance"`
-	Documents     []DocumentReference `json:"evidence_documents"`
-}
-
-type DataPage struct {
-	Records      []DataRecord `json:"records"`
-	Total        int          `json:"total_records"`
-	DataRevision string       `json:"data_revision"`
-	NextCursor   string       `json:"next_cursor,omitempty"`
-}
+type SearchEvidenceOutput = pipeline.EvidencePage

@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"go-lua-crawler/internal/repository"
-	"go-lua-crawler/internal/task"
-	"go-lua-crawler/internal/testdb"
+	"gorelay/internal/repository"
+	"gorelay/internal/task"
+	"gorelay/internal/testdb"
 )
 
 func TestGeneratedTaskKeepsItsPersistedExecutionDeadline(t *testing.T) {

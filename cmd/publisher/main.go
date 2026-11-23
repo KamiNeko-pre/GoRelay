@@ -8,11 +8,11 @@ import (
 	"syscall"
 	"time"
 
-	"go-lua-crawler/internal/config"
-	"go-lua-crawler/internal/logger"
-	"go-lua-crawler/internal/queue"
-	"go-lua-crawler/internal/repository"
-	"go-lua-crawler/internal/service"
+	"gorelay/internal/config"
+	"gorelay/internal/logger"
+	"gorelay/internal/queue"
+	"gorelay/internal/repository"
+	"gorelay/internal/service"
 	"go.uber.org/zap"
 )
 

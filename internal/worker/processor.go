@@ -4,14 +4,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go-lua-crawler/internal/engine"
+	"gorelay/internal/engine"
+	"sync"
 	"time"
 
-	"go-lua-crawler/internal/repository"
-	taskmodel "go-lua-crawler/internal/task"
+	"gorelay/internal/repository"
+	taskmodel "gorelay/internal/task"
 
 	"github.com/redis/go-redis/v9"
 )
+
+var activeCancels sync.Map // map[uint64]context.CancelFunc
+
+// CancelActiveTask cancels an in-flight local task execution immediately.
+func CancelActiveTask(taskID uint64) bool {
+	if fn, ok := activeCancels.Load(taskID); ok {
+		fn.(context.CancelFunc)()
+		return true
+	}
+	return false
+}
 
 // Processor owns task-state decisions and acknowledgements after delivery.
 type Processor struct {
@@ -87,15 +99,18 @@ func (processor *Processor) process(ctx context.Context, message redis.XMessage,
 	if err != nil {
 		return fmt.Errorf("claim task %d: %w", crawlTask.ID, err)
 	}
+	crawlTask.RunToken = token
 	processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageClaimed, taskmodel.EventLevelInfo, "获取任务", "Worker 已获取任务租约")
 	execCtx, cancel := context.WithCancel(ctx)
+	activeCancels.Store(crawlTask.ID, cancel)
+	defer activeCancels.Delete(crawlTask.ID)
 	if !executionDeadline.IsZero() {
 		var deadlineCancel context.CancelFunc
 		execCtx, deadlineCancel = context.WithDeadline(execCtx, executionDeadline)
 		defer deadlineCancel()
 	}
 	var stopRenew func() error
-	if crawlTask.ProgramHash != "" {
+	if crawlTask.ProgramHash != "" || crawlTask.SourceID != "" {
 		stopRenew = processor.renewExecution(execCtx, cancel, crawlTask.ID, token, leaseDuration, crawlTask.RunID)
 	}
 	var persist repository.PersistTaskResult
@@ -119,6 +134,11 @@ func (processor *Processor) process(ctx context.Context, message redis.XMessage,
 		status, failureCode, lastError = taskmodel.StatusFailed, "lua_execution", executionErr.Error()
 		if errors.Is(executionErr, context.DeadlineExceeded) {
 			failureCode = "lua_timeout"
+		} else if errors.Is(executionErr, context.Canceled) {
+			if latest, getErr := repository.GetCrawlTask(ctx, crawlTask.ID); getErr == nil && latest.Cancelled {
+				status = taskmodel.StatusCancelled
+				failureCode = "cancelled"
+			}
 		}
 		processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageFailed, taskmodel.EventLevelError, failureCode, lastError)
 	} else {

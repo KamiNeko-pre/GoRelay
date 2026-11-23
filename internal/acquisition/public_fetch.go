@@ -22,7 +22,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"go-lua-crawler/internal/agentstatus"
+	"gorelay/internal/agentstatus"
 	"golang.org/x/net/html/charset"
 	"golang.org/x/net/publicsuffix"
 	"golang.org/x/text/encoding/simplifiedchinese"

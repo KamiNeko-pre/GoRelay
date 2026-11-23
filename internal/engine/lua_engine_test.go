@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"go-lua-crawler/internal/acquisition"
+	"gorelay/internal/acquisition"
 )
 
 func TestExecuteLuaScriptStopsDeadloopAtDeadline(t *testing.T) {

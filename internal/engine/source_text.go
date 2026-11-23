@@ -2,7 +2,7 @@ package engine
 
 import (
 	"github.com/yuin/gopher-lua"
-	"go-lua-crawler/internal/acquisition"
+	"gorelay/internal/acquisition"
 )
 
 func sourceText(l *lua.LState) int {

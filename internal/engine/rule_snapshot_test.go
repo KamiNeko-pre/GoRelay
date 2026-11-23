@@ -3,11 +3,10 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"go-lua-crawler/internal/agentdata"
-	"go-lua-crawler/internal/config"
-	"go-lua-crawler/internal/repository"
-	task "go-lua-crawler/internal/task"
-	"go-lua-crawler/internal/testdb"
+	"gorelay/internal/config"
+	"gorelay/internal/repository"
+	task "gorelay/internal/task"
+	"gorelay/internal/testdb"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,10 +20,7 @@ func TestAcceptedKnownRuleExecutesFrozenCodeAfterDiskReplacement(t *testing.T) {
 	t.Setenv("LUA_SPIDER_CONFIG", configPath)
 	config.InitConfig()
 	db := testdb.Open(t)
-	if err := agentdata.NewStore(db).Migrate(); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&repository.CrawlResult{}); err != nil {
+	if err := db.AutoMigrate(&repository.CrawlResult{}, &repository.FrozenRule{}); err != nil {
 		t.Fatal(err)
 	}
 	old := repository.DB

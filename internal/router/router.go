@@ -1,43 +1,62 @@
 package router
 
 import (
+	"crypto/subtle"
+	"net/http"
+	"os"
+	"strings"
+
 	"github.com/gin-gonic/gin"
-	"go-lua-crawler/internal/aiapp"
-	"go-lua-crawler/internal/handler"
-	"go-lua-crawler/internal/information"
+	"gorelay/internal/connector"
+	"gorelay/internal/handler"
+	"gorelay/internal/mcpserver"
 )
 
-func SetupRouter(services ...*aiapp.Service) *gin.Engine {
-	var ai *aiapp.Service
+func SetupRouter(services ...*connector.Service) *gin.Engine {
+	var connSvc *connector.Service
 	if len(services) > 0 {
-		ai = services[0]
+		connSvc = services[0]
 	}
-	var info *information.Service
-	if ai != nil {
-		info = information.NewService(ai)
-		if err := info.Configure(); err != nil {
-			info = nil
-		}
-	}
-	return SetupRouterWithInformation(ai, info)
-}
 
-func SetupRouterWithInformation(ai *aiapp.Service, info *information.Service) *gin.Engine {
-	// Gin 默认路由器已经包含日志和 panic recovery 中间件。
 	r := gin.Default()
-	// 生产服务直接托管分析工作台；API 仍然使用 /api/v1 前缀，
-	// 因此前端不会需要单独启动一个开发服务器。
-	r.Static("/assets", "./web/assets")
 	r.StaticFile("/", "./web/index.html")
+	r.StaticFile("/evidence", "./web/evidence.html")
 	r.GET("/healthz", func(c *gin.Context) { c.Status(200) })
-	aiapp.RegisterRoutes(r, ai)
-	information.RegisterRoutes(r, info)
 
-	// 只保留只读分析视图接口供 /assets/analysis.html 使用，旧 /tasks 调度入口已移除。
+	if connSvc != nil {
+		publicBaseURL := strings.TrimSpace(os.Getenv("GORELAY_PUBLIC_BASE_URL"))
+		mcpHandler := mcpserver.NewHandler(mcpserver.ConnectorBackend{Service: connSvc}, publicBaseURL)
+		r.Any("/mcp", adminAuthMiddleware(), gin.WrapH(mcpHandler))
+	}
+
+	h := handler.V2Handler{Service: connSvc}
 	v1 := r.Group("/api/v1")
 	{
-		v1.GET("/analysis/snapshots", handler.ListAnalysisSnapshots)
-		v1.GET("/analysis/rules", handler.ListAnalysisRules)
+		v1.GET("/connectors", adminAuthMiddleware(), h.ListConnectors)
+		v1.GET("/metrics/summary", adminAuthMiddleware(), h.MetricsSummary)
+		v1.GET("/drift-events", adminAuthMiddleware(), h.ListDriftEvents)
+		v1.GET("/jobs/:id", adminAuthMiddleware(), h.GetJob)
+		v1.GET("/evidence", adminAuthMiddleware(), h.ReadEvidence)
 	}
 	return r
+}
+
+func adminAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := strings.TrimSpace(os.Getenv("GORELAY_ADMIN_TOKEN"))
+		if token == "" {
+			if strings.EqualFold(os.Getenv("GORELAY_ENV"), "production") {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "GORELAY_ADMIN_TOKEN required in production"})
+				return
+			}
+			c.Next()
+			return
+		}
+		got := c.GetHeader("Authorization")
+		if subtle.ConstantTimeCompare([]byte(got), []byte("Bearer "+token)) != 1 {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		c.Next()
+	}
 }

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
-	"go-lua-crawler/internal/logger"
+	"gorelay/internal/logger"
 	"go.uber.org/zap"
 )
 

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	taskmodel "go-lua-crawler/internal/task"
+	taskmodel "gorelay/internal/task"
 )
 
 func TestLuaParentCancellation(t *testing.T) {

@@ -29,24 +29,22 @@ func TestLegacySingularTaskRouteIsNotRegistered(t *testing.T) {
 	}
 }
 
-func TestUnavailableInformationFrontendKeepsCrawlerRoutesAvailable(t *testing.T) {
+func TestHealthzAndAuthGate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	t.Setenv("GORELAY_ADMIN_TOKEN", "local-test-token")
-	r := SetupRouterWithInformation(nil, nil)
-	for _, tc := range []struct {
-		path   string
-		status int
-	}{
-		{"/healthz", 200},
-		{"/api/v1/agent/status", 200},
-		{"/api/v1/information/requests/unavailable", 503},
-	} {
-		req := httptest.NewRequest("GET", tc.path, nil)
-		req.Header.Set("Authorization", "Bearer local-test-token")
-		out := httptest.NewRecorder()
-		r.ServeHTTP(out, req)
-		if out.Code != tc.status {
-			t.Fatalf("%s returned %d want %d", tc.path, out.Code, tc.status)
-		}
+	t.Setenv("GORELAY_ADMIN_TOKEN", "test-secret")
+	r := SetupRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	out := httptest.NewRecorder()
+	r.ServeHTTP(out, req)
+	if out.Code != http.StatusOK {
+		t.Fatalf("/healthz returned %d want 200", out.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/connectors", nil)
+	out = httptest.NewRecorder()
+	r.ServeHTTP(out, req)
+	if out.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without bearer token, got %d", out.Code)
 	}
 }

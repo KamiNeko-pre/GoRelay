@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"go-lua-crawler/internal/config"
-	"go-lua-crawler/internal/queue"
-	"go-lua-crawler/internal/repository"
-	taskmodel "go-lua-crawler/internal/task"
+	"gorelay/internal/config"
+	"gorelay/internal/queue"
+	"gorelay/internal/repository"
+	taskmodel "gorelay/internal/task"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )

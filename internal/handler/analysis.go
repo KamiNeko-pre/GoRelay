@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"go-lua-crawler/internal/repository"
+	"gorelay/internal/repository"
 
 	"github.com/gin-gonic/gin"
 )

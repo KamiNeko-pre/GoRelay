@@ -9,6 +9,15 @@ type CrawlTask struct {
 	RequestKey        string     `json:"request_key" gorm:"type:varchar(128);not null;uniqueIndex"`
 	Target            string     `json:"target" gorm:"type:varchar(64);not null"`
 	URL               string     `json:"url" gorm:"type:text;not null"`
+	SourceID          string     `json:"source_id,omitempty" gorm:"size:64;index"`
+	ConnectorVersion  int        `json:"connector_version,omitempty"`
+	Executor          string     `json:"executor,omitempty" gorm:"size:32"`
+	ActiveDedupKey    string     `json:"active_dedup_key,omitempty" gorm:"size:128;index"`
+	CheckpointJSON    string     `json:"checkpoint_json,omitempty" gorm:"type:longtext"`
+	HitType           string     `json:"hit_type,omitempty" gorm:"size:32"`
+	RecordsSaved      int        `json:"records_saved" gorm:"not null;default:0"`
+	LatencyMS         int64      `json:"latency_ms" gorm:"not null;default:0"`
+	Cancelled         bool       `json:"cancelled" gorm:"not null;default:false"`
 	ProgramHash       string     `json:"program_hash,omitempty" gorm:"size:64"`
 	RuleHash          string     `json:"rule_hash,omitempty" gorm:"size:64"`
 	ProgramParams     string     `json:"-" gorm:"type:longtext"`

@@ -7,10 +7,9 @@ import (
 	"os"
 	"time"
 
-	"go-lua-crawler/internal/agentdata"
-	"go-lua-crawler/internal/config"
-	"go-lua-crawler/internal/repository"
-	taskmodel "go-lua-crawler/internal/task"
+	"gorelay/internal/config"
+	"gorelay/internal/repository"
+	taskmodel "gorelay/internal/task"
 	"gorm.io/gorm"
 )
 
@@ -18,14 +17,11 @@ import (
 // the result persistence callback for the Worker to commit with the terminal state.
 func ExecuteTask(ctx context.Context, task taskmodel.CrawlTask) (repository.PersistTaskResult, error) {
 	if task.RuleHash != "" {
-		artifact, err := agentdata.NewStore(repository.DB).Artifact(ctx, task.RuleHash)
+		rule, err := repository.GetFrozenRule(ctx, task.RuleHash)
 		if err != nil {
 			return nil, fmt.Errorf("load frozen rule: %w", err)
 		}
-		if artifact.Kind != "trusted_legacy" {
-			return nil, fmt.Errorf("generated code cannot enter trusted legacy VM")
-		}
-		result, err := executeLuaScriptContext(ctx, artifact.Code, task.URL, time.Duration(config.Get().Engine.LuaTimeout)*time.Second)
+		result, err := executeLuaScriptContext(ctx, rule.Code, task.URL, time.Duration(config.Get().Engine.LuaTimeout)*time.Second)
 		if err != nil {
 			return nil, err
 		}

@@ -2,16 +2,33 @@ package repository
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"go-lua-crawler/internal/agentdata"
-	task "go-lua-crawler/internal/task"
-	"gorm.io/gorm"
 	"os"
+	"time"
+
+	task "gorelay/internal/task"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-// Existing unknown targets keep their old acceptance behavior and fail at
-// execution. Every known rule accepted with available config binds its code.
+// FrozenRule stores an immutable hash-addressed snapshot of a local rule script.
+type FrozenRule struct {
+	Hash      string    `json:"hash" gorm:"primaryKey;size:64"`
+	Code      string    `json:"code" gorm:"type:longtext"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (FrozenRule) TableName() string { return "frozen_rules" }
+
+func GetFrozenRule(ctx context.Context, hash string) (FrozenRule, error) {
+	var rule FrozenRule
+	err := DB.WithContext(ctx).First(&rule, "hash = ?", hash).Error
+	return rule, err
+}
+
 func snapshotKnownRule(ctx context.Context, tx *gorm.DB, child *task.CrawlTask) error {
 	if child.ProgramHash != "" || child.RuleHash != "" {
 		return nil
@@ -34,11 +51,13 @@ func snapshotKnownRule(ctx context.Context, tx *gorm.DB, child *task.CrawlTask) 
 		if len(code) == 0 || len(code) > 64<<10 {
 			return fmt.Errorf("known rule code must contain 1..65536 bytes")
 		}
-		a, err := agentdata.NewStore(tx).SaveArtifact(ctx, agentdata.ProgramArtifact{Code: string(code), Kind: "trusted_legacy", PolicyVersion: "trusted-legacy-v1"})
-		if err != nil {
+		sum := sha256.Sum256(code)
+		hash := hex.EncodeToString(sum[:])
+		frozen := FrozenRule{Hash: hash, Code: string(code)}
+		if err := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&frozen).Error; err != nil {
 			return err
 		}
-		child.RuleHash = a.Hash
+		child.RuleHash = hash
 		return nil
 	}
 	return nil

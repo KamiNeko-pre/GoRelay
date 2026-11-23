@@ -9,7 +9,7 @@ import (
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
-	"go-lua-crawler/internal/acquisition"
+	"gorelay/internal/acquisition"
 )
 
 type ProgramRequest struct {
@@ -50,6 +50,12 @@ type ProgramResult struct {
 // can inspect status codes and headers directly.
 type RequestFunc func(context.Context, acquisition.RequestOptions) (acquisition.Response, error)
 
+// CheckpointHooks connects Lua sandbox checkpoint.get/save primitives to durable storage.
+type CheckpointHooks struct {
+	Get  func(ctx context.Context) (any, error)
+	Save func(ctx context.Context, cursor any, records []map[string]any, evidence []acquisition.Response) error
+}
+
 // RunProgram is the generated-code entry point. Production executes it in the
 // separate lua-runner process, whose container supplies the hard memory limit.
 // This Go API provides caller cancellation; process isolation owns the heap limit.
@@ -64,6 +70,10 @@ func RunProgram(parent context.Context, in ProgramRequest, limits ProgramLimits,
 }
 
 func RunProgramWithRequester(parent context.Context, in ProgramRequest, limits ProgramLimits, request RequestFunc) (result ProgramResult, err error) {
+	return RunProgramWithHooks(parent, in, limits, request, nil)
+}
+
+func RunProgramWithHooks(parent context.Context, in ProgramRequest, limits ProgramLimits, request RequestFunc, cp *CheckpointHooks) (result ProgramResult, err error) {
 	start := time.Now()
 	var requestFailure error
 	result.Requests = []acquisition.Receipt{}
@@ -284,6 +294,105 @@ func RunProgramWithRequester(parent context.Context, in ProgramRequest, limits P
 	L.SetGlobal("http_get_referer", L.NewFunction(installFetch(http.MethodGet)))
 	L.SetGlobal("http_head", L.NewFunction(installFetch(http.MethodHead)))
 	L.SetGlobal("http_request", L.NewFunction(luaHTTPRequest))
+
+	flushedEvidence := 0
+	var inMemoryCheckpoint any
+	cpTable := L.NewTable()
+	cpTable.RawSetString("get", L.NewFunction(func(L *lua.LState) int {
+		if cp != nil && cp.Get != nil {
+			val, err := cp.Get(ctx)
+			if err != nil {
+				L.RaiseError("checkpoint.get failed: %v", err)
+				return 0
+			}
+			inMemoryCheckpoint = val
+		}
+		if inMemoryCheckpoint == nil {
+			L.Push(lua.LNil)
+			return 1
+		}
+		var normalized any
+		if rawCP, merr := json.Marshal(inMemoryCheckpoint); merr != nil {
+			L.RaiseError("checkpoint.get normalize failed: %v", merr)
+			return 0
+		} else {
+			dec := json.NewDecoder(strings.NewReader(string(rawCP)))
+			dec.UseNumber()
+			if derr := dec.Decode(&normalized); derr != nil {
+				L.RaiseError("checkpoint.get decode failed: %v", derr)
+				return 0
+			}
+		}
+		lv, err := jsonValueToLua(L, normalized, 0)
+		if err != nil {
+			L.RaiseError("checkpoint.get decode failed: %v", err)
+			return 0
+		}
+		L.Push(lv)
+		return 1
+	}))
+	cpTable.RawSetString("save", L.NewFunction(func(L *lua.LState) int {
+		var cursorVal any
+		if L.GetTop() >= 1 && L.Get(1) != lua.LNil {
+			var err error
+			cursorVal, err = luaJSON(L.Get(1), map[*lua.LTable]bool{}, strictCollectionNode)
+			if err != nil {
+				L.RaiseError("checkpoint.save invalid cursor: %v", err)
+				return 0
+			}
+		}
+		var rows []map[string]any
+		if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
+			rawBatch, err := luaJSON(L.Get(2), map[*lua.LTable]bool{}, acquisitionItems)
+			if err != nil {
+				L.RaiseError("checkpoint.save invalid records batch: %v", err)
+				return 0
+			}
+			arr, ok := rawBatch.([]any)
+			if !ok {
+				if m, emptyObj := rawBatch.(map[string]any); emptyObj && len(m) == 0 {
+					arr = []any{}
+				} else {
+					L.RaiseError("checkpoint.save second argument must be an array of record tables")
+					return 0
+				}
+			}
+			if len(arr) > 200 {
+				L.RaiseError("checkpoint.save batch exceeds 200 items limit")
+				return 0
+			}
+			encodedBatch, err := json.Marshal(arr)
+			if err != nil || len(encodedBatch) > 1<<20 {
+				L.RaiseError("checkpoint.save batch exceeds 1 MiB payload limit")
+				return 0
+			}
+			rows = make([]map[string]any, 0, len(arr))
+			for idx, item := range arr {
+				row, ok := item.(map[string]any)
+				if !ok {
+					L.RaiseError("checkpoint.save record %d must be an object", idx+1)
+					return 0
+				}
+				rows = append(rows, row)
+			}
+		}
+		var batchEvidence []acquisition.Response
+		if flushedEvidence < len(result.SourceEvidence) {
+			batchEvidence = append(batchEvidence, result.SourceEvidence[flushedEvidence:]...)
+			flushedEvidence = len(result.SourceEvidence)
+		}
+		inMemoryCheckpoint = cursorVal
+		if cp != nil && cp.Save != nil {
+			if err := cp.Save(ctx, cursorVal, rows, batchEvidence); err != nil {
+				L.RaiseError("checkpoint.save failed: %v", err)
+				return 0
+			}
+		}
+		L.Push(lua.LBool(true))
+		return 1
+	}))
+	L.SetGlobal("checkpoint", cpTable)
+
 	if e = L.DoString(in.Code); e != nil {
 		if ctx.Err() != nil {
 			return result, ctx.Err()

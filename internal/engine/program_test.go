@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"go-lua-crawler/internal/acquisition"
+	"gorelay/internal/acquisition"
 )
 
 func TestProgramPaginationAndTypedResult(t *testing.T) {

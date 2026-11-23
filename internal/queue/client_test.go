@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"go-lua-crawler/internal/config"
+	"gorelay/internal/config"
 )
 
 func TestInitClientIntegration(t *testing.T) {
