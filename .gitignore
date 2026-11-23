@@ -50,6 +50,7 @@ __pycache__/
 
 # Private plans, raw benchmark captures and local verification artifacts
 /docs/*
+!/docs/architecture-v2.md
 /deploy/*
 !/deploy/.env.example
 !/deploy/Caddyfile
