@@ -9,10 +9,17 @@ import (
 )
 
 const (
-	DefaultMCPResponseMaxBytes = 16 * 1024
-	DefaultMCPPageSize         = 100
-	DefaultMaxFieldChars       = 2048
-	DefaultSnapshotExcerptSize = 64 * 1024
+	DefaultMCPResponseMaxBytes   = 16 * 1024
+	DefaultMCPSafetyMaxBytes     = 8 * 1024
+	DefaultMCPQueryMaxBytes      = DefaultMCPSafetyMaxBytes
+	DefaultMCPMultiQueryMaxBytes = DefaultMCPSafetyMaxBytes
+	MaxMCPMultiQueries           = 4
+	DefaultMCPPageSize           = 100
+	DefaultReceiptSampleRows     = 2
+	DefaultReceiptFieldChars     = 120
+	DefaultQueryFieldChars       = 240
+	DefaultMaxFieldChars         = 2048
+	DefaultSnapshotExcerptSize   = 64 * 1024
 )
 
 var ErrSilentDrift = errors.New("silent schema drift or soft-block detected")
@@ -71,6 +78,7 @@ type IngestInput struct {
 	Evidence         []acquisition.Response
 	AllowEmptyBatch  bool
 	RequireNonEmpty  bool
+	SkipMinRows      bool
 	SnapshotDir      string
 }
 
@@ -82,16 +90,36 @@ type IngestResult struct {
 	Drift             *DriftDiagnosis `json:"drift,omitempty"`
 }
 
+type QueryView struct {
+	Matched           int               `json:"matched"`
+	Returned          int               `json:"returned,omitempty"`
+	Groups            map[string]int    `json:"groups,omitempty"`
+	ExtractedURLs     []string          `json:"extracted_urls,omitempty"`
+	URLLabels         map[string]string `json:"url_labels,omitempty"`
+	TruncatedToBudget bool              `json:"truncated_to_budget,omitempty"`
+	NextCursor        string            `json:"next_cursor,omitempty"`
+	Records           []map[string]any  `json:"records,omitempty"`
+}
+
 type DeliveredPage struct {
-	SourceID          string           `json:"source_id,omitempty"`
-	JobID             uint64           `json:"job_id,omitempty"`
-	Returned          int              `json:"returned"`
-	Total             int64            `json:"total"`
-	TruncatedToBudget bool             `json:"truncated_to_budget,omitempty"`
-	NextCursor        string           `json:"next_cursor,omitempty"`
-	Summary           string           `json:"summary,omitempty"`
-	Records           []map[string]any `json:"records"`
-	SnapshotURLs      []string         `json:"snapshot_urls,omitempty"`
+	SourceID          string                `json:"source_id,omitempty"`
+	JobID             uint64                `json:"job_id,omitempty"`
+	Mode              string                `json:"mode,omitempty"` // receipt | query | multi_query | page
+	Returned          int                   `json:"returned,omitempty"`
+	Total             int64                 `json:"total"`
+	Matched           int                   `json:"matched,omitempty"`
+	Fields            []string              `json:"fields,omitempty"`
+	Groups            map[string]int        `json:"groups,omitempty"`
+	ExtractedURLs     []string              `json:"extracted_urls,omitempty"`
+	URLLabels         map[string]string     `json:"url_labels,omitempty"`
+	Views             map[string]*QueryView `json:"views,omitempty"`
+	TruncatedToBudget bool                  `json:"truncated_to_budget,omitempty"`
+	NextCursor        string                `json:"next_cursor,omitempty"`
+	Summary           string                `json:"summary,omitempty"`
+	Records           []map[string]any      `json:"records,omitempty"`
+	SnapshotRefs      []string              `json:"snapshot_refs,omitempty"`
+	SnapshotURLs      []string              `json:"snapshot_urls,omitempty"`
+	ExportURLs        map[string]string     `json:"export_urls,omitempty"`
 }
 
 type EvidenceHit struct {

@@ -49,7 +49,9 @@ func main() {
 	defer safeClient.Close()
 
 	snapDir := strings.TrimSpace(os.Getenv("GORELAY_SNAPSHOT_DIR"))
-	connSvc, err := connector.NewService(repository.DB, safeClient, pipeline.NewStore(repository.DB, snapDir), connector.ServiceConfig{
+	pipeStore := pipeline.NewStore(repository.DB, snapDir)
+	defer pipeStore.WaitSnapshots()
+	connSvc, err := connector.NewService(repository.DB, safeClient, pipeStore, connector.ServiceConfig{
 		RunnerURL:         strings.TrimSpace(os.Getenv("GORELAY_RUNNER_URL")),
 		RunnerToken:       strings.TrimSpace(os.Getenv("GORELAY_RUNNER_TOKEN")),
 		CheckpointBaseURL: strings.TrimSpace(os.Getenv("GORELAY_CHECKPOINT_BASE_URL")),

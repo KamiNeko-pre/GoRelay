@@ -47,4 +47,11 @@ func TestHealthzAndAuthGate(t *testing.T) {
 	if out.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 without bearer token, got %d", out.Code)
 	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/sources/demo/export?format=csv", nil)
+	out = httptest.NewRecorder()
+	r.ServeHTTP(out, req)
+	if out.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 on export without bearer token, got %d", out.Code)
+	}
 }

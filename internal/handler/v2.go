@@ -124,3 +124,41 @@ func (h V2Handler) ReadEvidence(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, page)
 }
+
+func (h V2Handler) ExportSource(c *gin.Context) {
+	if h.Service == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "connector service unavailable"})
+		return
+	}
+	sourceID := strings.TrimSpace(c.Param("id"))
+	if sourceID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "source id is required"})
+		return
+	}
+	format := c.DefaultQuery("format", "json")
+	contentType, body, err := h.Service.Pipeline.ExportRecords(c.Request.Context(), sourceID, 0, format)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.Data(http.StatusOK, contentType, []byte(body))
+}
+
+func (h V2Handler) ExportJob(c *gin.Context) {
+	if h.Service == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "connector service unavailable"})
+		return
+	}
+	jobID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil || jobID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid job id"})
+		return
+	}
+	format := c.DefaultQuery("format", "json")
+	contentType, body, err := h.Service.Pipeline.ExportRecords(c.Request.Context(), "", jobID, format)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.Data(http.StatusOK, contentType, []byte(body))
+}

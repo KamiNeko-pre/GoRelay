@@ -13,8 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gorelay/internal/acquisition"
@@ -25,62 +27,76 @@ import (
 
 var reTitleTag = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 
+type pendingSnapshotWrite struct {
+	gzPath string
+	body   string
+}
+
 type Store struct {
-	DB          *gorm.DB
-	SnapshotDir string
+	DB            *gorm.DB
+	SnapshotDir   string
+	MaxQueryBytes int
+
+	snapOnce sync.Once
+	snapSem  chan struct{}
+	snapWG   sync.WaitGroup
+}
+
+func (s *Store) QuerySafetyMaxBytes() int {
+	if s != nil && s.MaxQueryBytes > 0 {
+		return s.MaxQueryBytes
+	}
+	return DefaultMCPSafetyMaxBytes
 }
 
 func NewStore(db *gorm.DB, snapshotDir string) *Store {
 	if strings.TrimSpace(snapshotDir) == "" {
 		snapshotDir = filepath.Join("data", "snapshots")
 	}
-	return &Store{DB: db, SnapshotDir: snapshotDir}
-}
-
-func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(&SourceRecord{}, &SnapshotBlob{})
-}
-
-// ArchiveSnapshot compresses raw HTTP bytes with gzip under content-addressed storage
-// and stores bounded metadata + excerpt in snapshot_blobs.
-func ArchiveSnapshot(ctx context.Context, tx *gorm.DB, snapshotDir, sourceID string, jobID uint64, resp acquisition.Response) (string, error) {
-	if resp.Body == "" {
-		return "", nil
+	return &Store{
+		DB:          db,
+		SnapshotDir: snapshotDir,
+		snapSem:     make(chan struct{}, 16),
 	}
+}
+
+func (s *Store) initArchiver() {
+	s.snapOnce.Do(func() {
+		if s.snapSem == nil {
+			s.snapSem = make(chan struct{}, 16)
+		}
+	})
+}
+
+// WaitSnapshots blocks until all background snapshot gzip writes finish.
+func (s *Store) WaitSnapshots() {
+	s.snapWG.Wait()
+}
+
+func (s *Store) enqueueSnapshotGzips(items []pendingSnapshotWrite) {
+	if len(items) == 0 {
+		return
+	}
+	s.initArchiver()
+	for _, item := range items {
+		it := item
+		s.snapWG.Add(1)
+		go func() {
+			defer s.snapWG.Done()
+			s.snapSem <- struct{}{}
+			defer func() { <-s.snapSem }()
+			_ = writeSnapshotGzip(it.gzPath, it.body)
+		}()
+	}
+}
+
+func prepareSnapshotBlob(snapshotDir, sourceID string, jobID uint64, resp acquisition.Response) (string, string, SnapshotBlob) {
 	if strings.TrimSpace(snapshotDir) == "" {
 		snapshotDir = filepath.Join("data", "snapshots")
 	}
 	sum := sha256.Sum256([]byte(resp.Body))
 	ref := hex.EncodeToString(sum[:])
-
-	shardDir := filepath.Join(snapshotDir, ref[:2])
-	if err := os.MkdirAll(shardDir, 0o755); err != nil {
-		return "", fmt.Errorf("create snapshot dir: %w", err)
-	}
-	gzPath := filepath.Join(shardDir, ref+".gz")
-	if _, err := os.Stat(gzPath); errors.Is(err, os.ErrNotExist) {
-		var buf bytes.Buffer
-		zw := gzip.NewWriter(&buf)
-		if _, err := zw.Write([]byte(resp.Body)); err != nil {
-			_ = zw.Close()
-			return "", err
-		}
-		if err := zw.Close(); err != nil {
-			return "", err
-		}
-		tmp := gzPath + ".tmp"
-		if err := os.WriteFile(tmp, buf.Bytes(), 0o600); err != nil {
-			return "", err
-		}
-		if err := os.Rename(tmp, gzPath); err != nil {
-			_ = os.Remove(tmp)
-			return "", err
-		}
-	}
-
-	if tx == nil {
-		return ref, nil
-	}
+	gzPath := filepath.Join(snapshotDir, ref[:2], ref+".gz")
 	title := extractTitle(resp.Body)
 	excerpt := SanitizeText(resp.Body)
 	if len(excerpt) > DefaultSnapshotExcerptSize {
@@ -102,16 +118,90 @@ func ArchiveSnapshot(ctx context.Context, tx *gorm.DB, snapshotDir, sourceID str
 		ByteSize:     int64(len(resp.Body)),
 		FetchedAt:    fetched,
 	}
+	return ref, gzPath, blob
+}
+
+func writeSnapshotGzip(gzPath, body string) error {
+	if _, err := os.Stat(gzPath); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	dir := filepath.Dir(gzPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create snapshot dir: %w", err)
+	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte(body)); err != nil {
+		_ = zw.Close()
+		return err
+	}
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	tmpFile, err := os.CreateTemp(dir, filepath.Base(gzPath)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(buf.Bytes()); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Chmod(0o600); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, gzPath); err != nil {
+		_ = os.Remove(tmpPath)
+		// Content-addressed file already committed by a concurrent writer.
+		if _, statErr := os.Stat(gzPath); statErr == nil {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func Migrate(db *gorm.DB) error {
+	return db.AutoMigrate(&SourceRecord{}, &SnapshotBlob{})
+}
+
+// ArchiveSnapshot compresses raw HTTP bytes synchronously with gzip under content-addressed
+// storage and optionally stores bounded metadata + excerpt in snapshot_blobs.
+func ArchiveSnapshot(ctx context.Context, tx *gorm.DB, snapshotDir, sourceID string, jobID uint64, resp acquisition.Response) (string, error) {
+	if resp.Body == "" {
+		return "", nil
+	}
+	ref, gzPath, blob := prepareSnapshotBlob(snapshotDir, sourceID, jobID, resp)
+	if err := writeSnapshotGzip(gzPath, resp.Body); err != nil {
+		return "", err
+	}
+	if tx == nil {
+		return ref, nil
+	}
 	if err := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&blob).Error; err != nil {
 		return "", err
 	}
 	return ref, nil
 }
 
-// IngestBatchTx validates, sanitizes, deduplicates, and version-updates records atomically.
+// IngestBatchTx validates, sanitizes, deduplicates, and version-updates records atomically,
+// while offloading raw HTTP gzip disk compression asynchronously out of the critical path.
 func (s *Store) IngestBatchTx(ctx context.Context, tx *gorm.DB, in IngestInput) (IngestResult, error) {
 	out := IngestResult{InputRows: len(in.Records)}
-	if drift := CheckSilentDrift(in.Records, in.OutputSchema, in.Evidence, in.AllowEmptyBatch && !in.RequireNonEmpty); drift != nil {
+	checkSchema := in.OutputSchema
+	if in.SkipMinRows {
+		checkSchema.MinRows = 0
+	}
+	if drift := CheckSilentDrift(in.Records, checkSchema, in.Evidence, in.AllowEmptyBatch && !in.RequireNonEmpty); drift != nil {
 		out.Drift = drift
 		return out, fmt.Errorf("%w: %s", ErrSilentDrift, drift.Reason)
 	}
@@ -125,21 +215,24 @@ func (s *Store) IngestBatchTx(ctx context.Context, tx *gorm.DB, in IngestInput) 
 	}
 
 	urlToRef := make(map[string]string, len(in.Evidence))
+	pendingGzips := make([]pendingSnapshotWrite, 0, len(in.Evidence))
 	var primaryRef string
 	for _, ev := range in.Evidence {
-		ref, err := ArchiveSnapshot(ctx, tx, dir, in.SourceID, in.JobID, ev)
-		if err != nil {
+		if ev.Body == "" {
+			continue
+		}
+		ref, gzPath, blob := prepareSnapshotBlob(dir, in.SourceID, in.JobID, ev)
+		if err := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&blob).Error; err != nil {
 			return out, err
 		}
-		if ref != "" {
-			if primaryRef == "" {
-				primaryRef = ref
-			}
-			if ev.Receipt.URL != "" {
-				urlToRef[ev.Receipt.URL] = ref
-			}
-			out.SnapshotRefs = append(out.SnapshotRefs, ref)
+		pendingGzips = append(pendingGzips, pendingSnapshotWrite{gzPath: gzPath, body: ev.Body})
+		if primaryRef == "" {
+			primaryRef = ref
 		}
+		if ev.Receipt.URL != "" {
+			urlToRef[ev.Receipt.URL] = ref
+		}
+		out.SnapshotRefs = append(out.SnapshotRefs, ref)
 	}
 
 	now := time.Now().UTC()
@@ -194,7 +287,69 @@ func (s *Store) IngestBatchTx(ctx context.Context, tx *gorm.DB, in IngestInput) 
 		}
 		out.SavedRows++
 	}
+	s.enqueueSnapshotGzips(pendingGzips)
 	return out, nil
+}
+
+func (s *Store) currentSourceQuery(ctx context.Context, sourceID string, jobID uint64) *gorm.DB {
+	q := s.DB.WithContext(ctx).Model(&SourceRecord{}).Where("is_current = ?", true)
+	if sourceID != "" {
+		q = q.Where("source_id = ?", sourceID)
+	}
+	if jobID > 0 {
+		q = q.Where("job_id = ?", jobID)
+	}
+	return q
+}
+
+// DeliverReceipt returns a lightweight (<1KB) delivery receipt with total count,
+// field schema, at most 2 compact truncated samples, export links, and snapshot URLs
+// without dumping bulk raw records into host agent context.
+func (s *Store) DeliverReceipt(ctx context.Context, sourceID string, jobID uint64, baseURL string) (DeliveredPage, error) {
+	q := s.currentSourceQuery(ctx, sourceID, jobID)
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return DeliveredPage{}, err
+	}
+	var rows []SourceRecord
+	if err := q.Order("id ASC").Limit(DefaultReceiptSampleRows).Find(&rows).Error; err != nil {
+		return DeliveredPage{}, err
+	}
+	page := DeliveredPage{
+		SourceID:   sourceID,
+		JobID:      jobID,
+		Mode:       "receipt",
+		Total:      total,
+		Records:    make([]map[string]any, 0, len(rows)),
+		ExportURLs: buildExportURLs(baseURL, sourceID, jobID),
+	}
+	fieldSet := make(map[string]bool)
+	seenRefs := make(map[string]bool)
+	for _, r := range rows {
+		obj := decodePayloadMap(r.PayloadJSON)
+		compact := make(map[string]any, len(obj)+1)
+		for k, v := range obj {
+			fieldSet[k] = true
+			compact[k] = truncateFieldValue(v, DefaultReceiptFieldChars)
+		}
+		if r.SnapshotRef != "" {
+			compact["_snapshot_ref"] = r.SnapshotRef
+			if !seenRefs[r.SnapshotRef] {
+				seenRefs[r.SnapshotRef] = true
+				page.SnapshotURLs = append(page.SnapshotURLs, formatSnapshotURL(baseURL, r.SnapshotRef))
+			}
+		}
+		page.Records = append(page.Records, compact)
+	}
+	for k := range fieldSet {
+		page.Fields = append(page.Fields, k)
+	}
+	sort.Strings(page.Fields)
+	page.Returned = len(page.Records)
+	if total > int64(page.Returned) {
+		page.Summary = fmt.Sprintf("Cleaned and persisted %d records (%d sample rows shown). Pass query={fields,where,order_by,limit,group_by,extract_urls} to compute/slice results without downloading raw bulk data, or read export_urls.", total, page.Returned)
+	}
+	return page, nil
 }
 
 // PackRecordsToBudget packs serialized records under maxBytes/maxRows limits for MCP responses.
@@ -244,13 +399,7 @@ func (s *Store) DeliverRecordsPage(ctx context.Context, sourceID string, jobID u
 	if pageSize <= 0 || pageSize > DefaultMCPPageSize {
 		pageSize = DefaultMCPPageSize
 	}
-	q := s.DB.WithContext(ctx).Model(&SourceRecord{}).Where("is_current = ?", true)
-	if sourceID != "" {
-		q = q.Where("source_id = ?", sourceID)
-	}
-	if jobID > 0 {
-		q = q.Where("job_id = ?", jobID)
-	}
+	q := s.currentSourceQuery(ctx, sourceID, jobID)
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
 		return DeliveredPage{}, err
@@ -269,7 +418,9 @@ func (s *Store) DeliverRecordsPage(ctx context.Context, sourceID string, jobID u
 	page := PackRecordsToBudget(rows, maxBytes, pageSize, baseURL)
 	page.SourceID = sourceID
 	page.JobID = jobID
+	page.Mode = "page"
 	page.Total = total
+	page.ExportURLs = buildExportURLs(baseURL, sourceID, jobID)
 	if page.NextCursor == "" && len(rows) > page.Returned && page.Returned > 0 {
 		page.NextCursor = strconv.FormatUint(rows[page.Returned-1].ID, 10)
 	}
@@ -279,9 +430,11 @@ func (s *Store) DeliverRecordsPage(ctx context.Context, sourceID string, jobID u
 	return page, nil
 }
 
-// SearchEvidence runs scoped BM25 retrieval over snapshot_blobs or pages an archived snapshot by ref.
+// SearchEvidence runs scoped BM25 retrieval over snapshot_blobs or pages compact archived excerpts by ref.
 func (s *Store) SearchEvidence(ctx context.Context, sourceIDs []string, query, snapshotRef, cursor string, pageSize int, baseURL string) (EvidencePage, error) {
-	if pageSize <= 0 || pageSize > 20 {
+	if pageSize <= 0 {
+		pageSize = 5
+	} else if pageSize > 10 {
 		pageSize = 10
 	}
 	if snapshotRef != "" {
@@ -293,7 +446,7 @@ func (s *Store) SearchEvidence(ctx context.Context, sourceIDs []string, query, s
 		if err != nil {
 			return EvidencePage{}, err
 		}
-		return sliceSnapshotText(blob, full, cursor, 4000, baseURL), nil
+		return sliceSnapshotText(blob, full, cursor, 1200, baseURL), nil
 	}
 	if len(sourceIDs) == 0 {
 		return EvidencePage{}, fmt.Errorf("source_ids or snapshot_ref is required for deterministic evidence search")

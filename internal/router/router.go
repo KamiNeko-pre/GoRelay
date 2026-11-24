@@ -35,7 +35,9 @@ func SetupRouter(services ...*connector.Service) *gin.Engine {
 		v1.GET("/connectors", adminAuthMiddleware(), h.ListConnectors)
 		v1.GET("/metrics/summary", adminAuthMiddleware(), h.MetricsSummary)
 		v1.GET("/drift-events", adminAuthMiddleware(), h.ListDriftEvents)
+		v1.GET("/sources/:id/export", adminAuthMiddleware(), h.ExportSource)
 		v1.GET("/jobs/:id", adminAuthMiddleware(), h.GetJob)
+		v1.GET("/jobs/:id/export", adminAuthMiddleware(), h.ExportJob)
 		v1.GET("/evidence", adminAuthMiddleware(), h.ReadEvidence)
 	}
 	return r
