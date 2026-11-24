@@ -86,6 +86,10 @@ func TestMCPV2SixToolsContractAndRecovery(t *testing.T) {
 	if len(listed.Tools) != 6 {
 		t.Fatalf("expected exactly 6 MCP tools, got %d", len(listed.Tools))
 	}
+	listedRaw, _ := json.Marshal(listed.Tools)
+	if len(listedRaw) > 12*1024 {
+		t.Fatalf("tools/list schema bloated to %d bytes (must stay compact < 12 KiB)", len(listedRaw))
+	}
 	wantNames := map[string]bool{
 		"gorelay_list_sources":    true,
 		"gorelay_probe_source":    true,

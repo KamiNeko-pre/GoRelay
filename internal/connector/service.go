@@ -229,6 +229,7 @@ type RunConnectorInput struct {
 	TargetURL       string         `json:"target_url,omitempty"`
 	Params          map[string]any `json:"params,omitempty"`
 	FreshnessTTLSec int            `json:"freshness_ttl,omitempty"`
+	Cursor          string         `json:"cursor,omitempty"`
 	WaitMS          int            `json:"wait_ms,omitempty"`
 	ForceRefresh    bool           `json:"force_refresh,omitempty"`
 }
@@ -520,16 +521,21 @@ func (s *Service) RunConnector(ctx context.Context, in RunConnectorInput, baseUR
 	// Fast Cache Hit path when requested freshness TTL is satisfied and source is healthy.
 	if !in.ForceRefresh && in.FreshnessTTLSec > 0 && conn.Status == StatusActive && conn.LastVerifiedAt != nil {
 		if time.Since(*conn.LastVerifiedAt) <= time.Duration(in.FreshnessTTLSec)*time.Second {
-			page, err := s.Pipeline.DeliverRecordsPage(ctx, conn.SourceID, 0, "", pipeline.DefaultMCPResponseMaxBytes, pipeline.DefaultMCPPageSize, baseURL)
-			if err == nil && page.Returned > 0 {
+			page, err := s.Pipeline.DeliverRecordsPage(ctx, conn.SourceID, 0, in.Cursor, pipeline.DefaultMCPResponseMaxBytes, pipeline.DefaultMCPPageSize, baseURL)
+			if err == nil && (page.Returned > 0 || in.Cursor != "") {
+				var latestTask taskmodel.CrawlTask
+				_ = s.DB.WithContext(ctx).Select("id").
+					Where("source_id = ? AND status = ?", conn.SourceID, taskmodel.StatusSucceeded).
+					Order("id DESC").First(&latestTask).Error
 				elapsed := time.Since(start).Milliseconds()
 				_ = s.DB.WithContext(ctx).Model(&Connector{}).Where("source_id = ?", conn.SourceID).
 					Updates(map[string]any{"reuse_count": gorm.Expr("reuse_count + 1"), "last_used_at": time.Now().UTC()}).Error
 				_ = s.DB.WithContext(ctx).Create(&ExecutionMetric{
-					SourceID: conn.SourceID, HitType: HitCacheHit, Executor: conn.Executor,
+					SourceID: conn.SourceID, JobID: latestTask.ID, HitType: HitCacheHit, Executor: conn.Executor,
 					LatencyMS: elapsed, SavedRows: page.Returned,
 				}).Error
 				return ExecutionResponse{
+					JobID:     latestTask.ID,
 					SourceID:  conn.SourceID,
 					Version:   conn.ActiveVersion,
 					Executor:  conn.Executor,

@@ -10,7 +10,7 @@ import (
 
 const (
 	DefaultMCPResponseMaxBytes = 16 * 1024
-	DefaultMCPPageSize         = 20
+	DefaultMCPPageSize         = 100
 	DefaultMaxFieldChars       = 2048
 	DefaultSnapshotExcerptSize = 64 * 1024
 )

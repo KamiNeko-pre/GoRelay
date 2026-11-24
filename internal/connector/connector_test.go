@@ -325,4 +325,32 @@ return true, {items = {}}
 	if err != nil || len(luaOutcome.Rows) != 1 || luaOutcome.Rows[0]["id"] != "p1" || luaOutcome.NextCursor == nil {
 		t.Fatalf("lua trial failed to capture checkpointed rows/cursor: %+v err=%v", luaOutcome, err)
 	}
+
+	// Single-page spec with pagination="none" and {page} param MUST respect caller params["page"]=2.
+	hits.Store(0)
+	var seenURL string
+	cfg.RequesterFactory = func(acquisition.Policy) (fetchgov.Requester, error) {
+		return &apiStubRequester{fn: func(_ context.Context, opts acquisition.RequestOptions) (acquisition.Response, error) {
+			seenURL = opts.URL
+			return acquisition.Response{
+				Body:    `{"items":[{"id":"p2","title":"Page 2"}]}`,
+				Receipt: acquisition.Receipt{URL: opts.URL, Status: 200, Headers: map[string]string{"content-type": "application/json"}},
+			}, nil
+		}}, nil
+	}
+	gov2, err := fetchgov.NewSafeClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noPagSpec := APISpec{
+		URLTemplate:  "https://api.example.com/items?page={page}",
+		Method:       http.MethodGet,
+		ItemsPath:    "/items",
+		FieldMapping: map[string]string{"id": "/id", "title": "/title"},
+		Pagination:   "none",
+	}
+	rows2, _, err := ExecuteHTTPAPI(context.Background(), gov2, noPagSpec, map[string]any{"page": 2}, "", 0, nil)
+	if err != nil || !strings.Contains(seenURL, "page=2") || len(rows2) != 1 || rows2[0]["id"] != "p2" {
+		t.Fatalf("pagination=none clobbered caller params[page]: url=%q rows=%+v err=%v", seenURL, rows2, err)
+	}
 }

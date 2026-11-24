@@ -50,9 +50,9 @@ type DeployAndRunInput struct {
 	Executor     string         `json:"executor,omitempty" jsonschema:"http_api (declarative JSON API without Lua) or lua_sandbox (gopher-lua script). Required unless rollback_to is set."`
 	Description  string         `json:"description,omitempty" jsonschema:"Concise description of what this connector retrieves and outputs."`
 	TargetURL    string         `json:"target_url,omitempty" jsonschema:"Target public URL (optional for http_api if url_template includes host)."`
-	SpecOrCode   string         `json:"spec_or_code,omitempty" jsonschema:"JSON APISpec string for executor=http_api, or complete Lua program for executor=lua_sandbox. Required unless rollback_to is set."`
+	SpecOrCode   string         `json:"spec_or_code,omitempty" jsonschema:"For executor=http_api: JSON APISpec {url_template, method, headers, items_path, field_mapping, pagination:'none'|'page'|'offset'|'cursor', page_param, next_cursor_path, max_pages}. For executor=lua_sandbox: Lua program returning true,{items=...}. Required unless rollback_to is set."`
 	InputSchema  map[string]any `json:"input_schema,omitempty" jsonschema:"Optional JSON object schema for params; inferred from params when omitted."`
-	OutputSchema map[string]any `json:"output_schema,omitempty" jsonschema:"Output schema JSON object: {fields:[{name,type,required}], entity_keys:[...], min_rows}. Required unless rollback_to is set."`
+	OutputSchema map[string]any `json:"output_schema,omitempty" jsonschema:"Output schema JSON object: {fields:[{name, type:'string'|'source_text'|'number'|'integer'|'boolean'|'string_array', required}], entity_keys:[...], min_rows}. Required unless rollback_to is set."`
 	Params       map[string]any `json:"params,omitempty" jsonschema:"Runtime parameters passed to URL template placeholders or Lua PARAMS."`
 	AuthProfile  string         `json:"auth_profile,omitempty" jsonschema:"Optional auth_profile name for authorized endpoints."`
 	WaitMS       int            `json:"wait_ms,omitempty" jsonschema:"Milliseconds to wait for synchronous fast-path completion (e.g. 3000) before returning job_id."`
@@ -64,6 +64,7 @@ type RunConnectorInput struct {
 	TargetURL       string         `json:"target_url,omitempty" jsonschema:"Optional URL override matching the connector target."`
 	Params          map[string]any `json:"params,omitempty" jsonschema:"Parameters satisfying the connector input_schema."`
 	FreshnessTTLSec int            `json:"freshness_ttl_sec,omitempty" jsonschema:"Return cached records with 0 network calls if verified within TTL seconds."`
+	Cursor          string         `json:"cursor,omitempty" jsonschema:"Optional data.next_cursor from a prior cache_hit page to read subsequent cached pages with 0 network calls."`
 	WaitMS          int            `json:"wait_ms,omitempty" jsonschema:"Short wait budget in ms to return cleaned JSON in one step if job finishes quickly."`
 	ForceRefresh    bool           `json:"force_refresh,omitempty" jsonschema:"Bypass freshness cache and enqueue a fresh run."`
 }
@@ -71,9 +72,10 @@ type RunConnectorInput struct {
 type ExecutionOutput = connector.ExecutionResponse
 
 type JobDataInput struct {
-	JobID  uint64 `json:"job_id" jsonschema:"Durable job_id returned by gorelay_deploy_and_run or gorelay_run_connector."`
-	Cursor string `json:"cursor,omitempty" jsonschema:"Pagination cursor returned in data.next_cursor."`
-	Cancel bool   `json:"cancel,omitempty" jsonschema:"Set true to cancel an in-flight job and terminate its sandbox process."`
+	JobID    uint64 `json:"job_id,omitempty" jsonschema:"Durable job_id returned by gorelay_deploy_and_run or gorelay_run_connector."`
+	SourceID string `json:"source_id,omitempty" jsonschema:"Optional source_id fallback to paginate current cached records when job_id is omitted."`
+	Cursor   string `json:"cursor,omitempty" jsonschema:"Pagination cursor returned in data.next_cursor."`
+	Cancel   bool   `json:"cancel,omitempty" jsonschema:"Set true to cancel an in-flight job and terminate its sandbox process."`
 }
 
 type SearchEvidenceInput struct {

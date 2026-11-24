@@ -68,6 +68,16 @@ func ExecuteHTTPAPI(
 				state.Page = 1
 			}
 		}
+	} else if params != nil {
+		if p, ok := asPositiveInt(params["page"]); ok {
+			state.Page = p
+		}
+		if o, ok := asPositiveInt(params["offset"]); ok {
+			state.Offset = o
+		}
+		if c, ok := params["cursor"].(string); ok && strings.TrimSpace(c) != "" {
+			state.Cursor = strings.TrimSpace(c)
+		}
 	}
 
 	remainingPages := maxPages
@@ -98,7 +108,7 @@ func ExecuteHTTPAPI(
 			URL:         targetURL,
 			Method:      method,
 			Headers:     spec.Headers,
-			Body:        expandTemplate(spec.BodyTemplate, params, state, false),
+			Body:        expandTemplate(spec.BodyTemplate, params, state, spec.Pagination, false),
 			AuthProfile: authProfile,
 		})
 		if err != nil {
@@ -141,7 +151,7 @@ func ExecuteHTTPAPI(
 }
 
 func buildAPIURL(spec APISpec, params map[string]any, state apiCursorState) (string, error) {
-	expanded := expandTemplate(spec.URLTemplate, params, state, true)
+	expanded := expandTemplate(spec.URLTemplate, params, state, spec.Pagination, true)
 	u, err := url.Parse(expanded)
 	if err != nil {
 		return "", fmt.Errorf("invalid expanded url_template: %w", err)
@@ -179,7 +189,7 @@ func buildAPIURL(spec APISpec, params map[string]any, state apiCursorState) (str
 	return u.String(), nil
 }
 
-func expandTemplate(tpl string, params map[string]any, state apiCursorState, escapeQuery bool) string {
+func expandTemplate(tpl string, params map[string]any, state apiCursorState, pagMode string, escapeQuery bool) string {
 	if tpl == "" {
 		return ""
 	}
@@ -190,13 +200,40 @@ func expandTemplate(tpl string, params map[string]any, state apiCursorState, esc
 		}
 		return raw
 	}
-	out = strings.ReplaceAll(out, "{page}", val(strconv.Itoa(state.Page)))
-	out = strings.ReplaceAll(out, "{offset}", val(strconv.Itoa(state.Offset)))
-	out = strings.ReplaceAll(out, "{cursor}", val(state.Cursor))
+	// Only let declarative pagination state own {page}/{offset}/{cursor} when
+	// pagination is active; when pagination is "none", caller params own them.
+	switch strings.ToLower(strings.TrimSpace(pagMode)) {
+	case "page":
+		out = strings.ReplaceAll(out, "{page}", val(strconv.Itoa(state.Page)))
+	case "offset":
+		out = strings.ReplaceAll(out, "{offset}", val(strconv.Itoa(state.Offset)))
+	case "cursor":
+		out = strings.ReplaceAll(out, "{cursor}", val(state.Cursor))
+	}
 	for k, v := range params {
 		out = strings.ReplaceAll(out, "{"+k+"}", val(fmt.Sprint(v)))
 	}
 	return out
+}
+
+func asPositiveInt(v any) (int, bool) {
+	switch x := v.(type) {
+	case int:
+		return x, x > 0
+	case int64:
+		return int(x), x > 0
+	case float64:
+		return int(x), x > 0 && float64(int(x)) == x
+	case json.Number:
+		if n, err := x.Int64(); err == nil && n > 0 {
+			return int(n), true
+		}
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(x)); err == nil && n > 0 {
+			return n, true
+		}
+	}
+	return 0, false
 }
 
 func extractAPIRows(root any, spec APISpec, sourceURL string) ([]map[string]any, error) {

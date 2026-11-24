@@ -103,6 +103,7 @@ func (b ConnectorBackend) RunConnector(ctx context.Context, in RunConnectorInput
 		TargetURL:       in.TargetURL,
 		Params:          in.Params,
 		FreshnessTTLSec: in.FreshnessTTLSec,
+		Cursor:          in.Cursor,
 		WaitMS:          in.WaitMS,
 		ForceRefresh:    in.ForceRefresh,
 	}, RequestBaseURL(ctx))
@@ -123,9 +124,22 @@ func (b ConnectorBackend) RunConnector(ctx context.Context, in RunConnectorInput
 
 func (b ConnectorBackend) GetJobData(ctx context.Context, in JobDataInput) (ExecutionOutput, error) {
 	if in.JobID == 0 {
+		if in.SourceID != "" && !in.Cancel {
+			page, err := b.Service.Pipeline.DeliverRecordsPage(ctx, in.SourceID, 0, in.Cursor, 16*1024, 100, RequestBaseURL(ctx))
+			if err != nil {
+				return ExecutionOutput{}, err
+			}
+			return ExecutionOutput{
+				SourceID: in.SourceID,
+				Status:   connector.HitCacheHit,
+				HitType:  connector.HitCacheHit,
+				Terminal: true,
+				Data:     &page,
+			}, nil
+		}
 		return ExecutionOutput{}, &ToolFailure{
 			Code:          "INVALID_ARGUMENTS",
-			Message:       "positive job_id is required",
+			Message:       "positive job_id (or source_id for cached pagination) is required",
 			RecoverySteps: defaultRecovery["gorelay_get_job_data"],
 		}
 	}
