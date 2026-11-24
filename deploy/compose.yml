@@ -14,7 +14,8 @@ x-backend-environment: &backend-environment
   GORELAY_REDIS_ADDR: redis:6379
   GORELAY_REDIS_STREAM: gorelay:tasks
   GORELAY_REDIS_CONSUMER_GROUP: gorelay-workers
-  GORELAY_ENGINE_WORKER_COUNT: ${WORKERS:-4}
+  GORELAY_PUBLISHER_POLL_INTERVAL_MS: ${GORELAY_PUBLISHER_POLL_INTERVAL_MS:-100}
+  GORELAY_ENGINE_WORKER_COUNT: ${WORKERS:-8}
   GORELAY_ENGINE_LUA_TIMEOUT: 45
 
 x-app: &app
@@ -92,9 +93,9 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    pids_limit: 32
-    mem_limit: 192m
-    cpus: 1.0
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 2.0
     restart: unless-stopped
     healthcheck:
       test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8091/healthz]

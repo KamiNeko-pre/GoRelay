@@ -51,7 +51,11 @@ func NewProcessor(client *redis.Client, cfg Config, executors ...func(context.Co
 	if len(executors) > 0 && executors[0] != nil {
 		execute = executors[0]
 	}
-	return &Processor{client: client, config: cfg, gate: make(chan struct{}, 1), execute: execute}, nil
+	gateCap := cfg.MaxConcurrent
+	if gateCap <= 0 {
+		gateCap = defaultMaxConcurrent
+	}
+	return &Processor{client: client, config: cfg, gate: make(chan struct{}, gateCap), execute: execute}, nil
 }
 
 // ProcessNewMessage handles a message read with the special ">" stream ID.

@@ -9,6 +9,7 @@ import (
 const (
 	defaultReadBlock     = 2 * time.Second
 	defaultReadCount     = int64(1)
+	defaultMaxConcurrent = 1
 	defaultClaimMinIdle  = 2 * time.Minute
 	defaultClaimInterval = 15 * time.Second
 )
@@ -21,12 +22,13 @@ type Config struct {
 	Consumer         string
 	ReadBlock        time.Duration
 	ReadCount        int64
+	MaxConcurrent    int
 	ClaimMinIdle     time.Duration
 	ClaimInterval    time.Duration
 	ExecutionTimeout time.Duration
 }
 
-// DefaultConfig supplies conservative local-development timing defaults.
+// DefaultConfig supplies balanced concurrent Redis worker timing defaults.
 func DefaultConfig(stream, group, consumer string) Config {
 	return Config{
 		Stream:           stream,
@@ -34,6 +36,7 @@ func DefaultConfig(stream, group, consumer string) Config {
 		Consumer:         consumer,
 		ReadBlock:        defaultReadBlock,
 		ReadCount:        defaultReadCount,
+		MaxConcurrent:    defaultMaxConcurrent,
 		ClaimMinIdle:     defaultClaimMinIdle,
 		ClaimInterval:    defaultClaimInterval,
 		ExecutionTimeout: 30 * time.Second,

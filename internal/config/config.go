@@ -72,7 +72,7 @@ func InitConfig() {
 	viper.SetDefault("redis.claim_min_idle_ms", 120000)
 	viper.SetDefault("redis.claim_interval_ms", 15000)
 	viper.SetDefault("publisher.batch_size", 100)
-	viper.SetDefault("publisher.poll_interval_ms", 1000)
+	viper.SetDefault("publisher.poll_interval_ms", 100)
 	viper.SetDefault("publisher.batch_timeout_seconds", 10)
 	// Viper 从项目根目录下的 configs/config.yaml 读取配置。
 	viper.SetConfigName("config")

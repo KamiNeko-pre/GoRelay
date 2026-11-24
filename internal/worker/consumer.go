@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -54,14 +55,32 @@ func (consumer *Consumer) Run(ctx context.Context) error {
 			return fmt.Errorf("read stream %q (group %q, consumer %q): %w", consumer.config.Stream, consumer.config.Group, consumer.config.Consumer, err)
 		}
 		for _, stream := range streams {
-			for _, message := range stream.Messages {
-				if err := consumer.processor.ProcessNewMessage(ctx, message); err != nil {
-					if ctx.Err() != nil {
-						return ctx.Err()
+			if len(stream.Messages) <= 1 {
+				for _, message := range stream.Messages {
+					if err := consumer.processor.ProcessNewMessage(ctx, message); err != nil {
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
+						log.Printf("message %s left pending in %s: %v", message.ID, stream.Stream, err)
 					}
-					log.Printf("message %s left pending in %s: %v", message.ID, stream.Stream, err)
 				}
+				continue
 			}
+			var wg sync.WaitGroup
+			for _, message := range stream.Messages {
+				msg := message
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if err := consumer.processor.ProcessNewMessage(ctx, msg); err != nil {
+						if ctx.Err() != nil {
+							return
+						}
+						log.Printf("message %s left pending in %s: %v", msg.ID, stream.Stream, err)
+					}
+				}()
+			}
+			wg.Wait()
 		}
 	}
 }

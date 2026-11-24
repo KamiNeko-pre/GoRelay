@@ -70,6 +70,9 @@ func runPublisherLoop(
 			log.Error("Outbox batch failed; unpublished rows will be retried", zap.Int("published_count", count), zap.Error(err))
 		} else if count > 0 {
 			log.Info("Outbox batch published", zap.Int("published_count", count))
+			if count >= cfg.BatchSize {
+				continue
+			}
 		}
 		select {
 		case <-ctx.Done():
