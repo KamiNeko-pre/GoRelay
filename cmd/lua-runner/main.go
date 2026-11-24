@@ -1,5 +1,8 @@
-// lua-runner runs exactly one program per child process. The HTTP parent owns
-// admission/caps; it never evaluates generated Lua in its own heap.
+// lua-runner runs exactly one program per isolated OS child process.
+// The long-lived HTTP parent owns admission caps and ONE shared fetchgov.SafeClient
+// (persistent robots cache, per-domain rate limiter, 429/WAF circuit breaker,
+// scoped AuthProfiles, and optional CDP Sidecar renderer); untrusted child
+// processes never hold credentials or open outbound sockets directly.
 package main
 
 import (
@@ -16,17 +19,34 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
-	"go-lua-crawler/internal/acquisition"
-	"go-lua-crawler/internal/aiapp"
-	"go-lua-crawler/internal/engine"
+	"gorelay/internal/acquisition"
+	"gorelay/internal/contract"
+	"gorelay/internal/engine"
+	"gorelay/internal/fetchgov"
+	"gorelay/internal/programrunner"
 )
 
-const maxInputBytes = 96 << 10
-
 var errChildMemoryBudget = errors.New("process memory budget exceeded")
+
+// A deployment resource budget for an isolated process, not a task/output quota.
+// Includes the Go/Lua heaps, parsed DOMs and retained source responses.
+func childMemoryBudget() (uint64, error) {
+	mb := uint64(0) // No application-invented quota; deployment owns resource budgets.
+	if raw := os.Getenv("GORELAY_RUNNER_MEMORY_MB"); raw != "" {
+		var err error
+		mb, err = strconv.ParseUint(raw, 10, 64)
+		if err != nil || mb == 0 || mb > ^uint64(0)>>20 {
+			return 0, fmt.Errorf("GORELAY_RUNNER_MEMORY_MB must be a positive representable MiB value")
+		}
+	}
+	return mb << 20, nil
+}
 
 type childIsolation interface {
 	Close()
@@ -36,9 +56,10 @@ type childIsolation interface {
 func main() {
 	serve := flag.Bool("serve", false, "serve private /execute HTTP endpoint")
 	child := flag.Bool("child", false, "internal one-shot child mode")
+	snapshotPipe := flag.Bool("snapshot-pipe", false, "internal child host-IPC channel")
 	listen := flag.String("listen", ":8091", "private runner bind address")
 	flag.Parse()
-	limits, configErr := aiapp.ConfiguredProgramLimits()
+	limits, configErr := programrunner.ConfiguredLimits()
 	if configErr != nil {
 		log.Fatal(configErr)
 	}
@@ -47,7 +68,24 @@ func main() {
 		if token == "" {
 			log.Fatal("GORELAY_RUNNER_TOKEN is required for HTTP mode")
 		}
-		server := &http.Server{Addr: *listen, Handler: runnerHandler(token, limits, executeChild), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: limits.Timeout + 5*time.Second, MaxHeaderBytes: 8192}
+		govCfg, err := fetchgov.ConfigFromEnv()
+		if err != nil {
+			log.Fatalf("load SafeClient config: %v", err)
+		}
+		sharedClient, err := fetchgov.NewSafeClient(govCfg)
+		if err != nil {
+			log.Fatalf("initialize shared SafeClient: %v", err)
+		}
+		defer sharedClient.Close()
+
+		var writeTimeout time.Duration
+		if limits.Timeout > 0 {
+			writeTimeout = limits.Timeout + 5*time.Second
+		}
+		execFn := func(ctx context.Context, in programrunner.Request) (programrunner.Response, error) {
+			return executeChildWithClient(ctx, in, sharedClient)
+		}
+		server := &http.Server{Addr: *listen, Handler: runnerHandler(token, limits, execFn), ReadHeaderTimeout: 5 * time.Second, WriteTimeout: writeTimeout, MaxHeaderBytes: 8192}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		go func() {
@@ -61,14 +99,20 @@ func main() {
 		}
 		return
 	}
-	_ = *child // one-shot is also the default CLI mode; no credentials are required.
+	if *child && *snapshotPipe {
+		if err := runSnapshotChild(os.Stdin, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	_ = *child // one-shot CLI mode; no credentials are required.
 	in, err := decodeRequest(os.Stdin)
-	out := aiapp.RunnerResponse{}
+	out := programrunner.Response{}
 	if err == nil {
 		if !*child {
 			in.Limits = capLimits(in.Limits, limits)
 		}
-		out, err = aiapp.RunPublicProgram(context.Background(), in)
+		out, err = programrunner.Run(context.Background(), in)
 	}
 	if err != nil {
 		out.Error = classifyError(err)
@@ -78,48 +122,57 @@ func main() {
 	}
 }
 
-func decodeRequest(reader io.Reader) (aiapp.RunnerRequest, error) {
-	var in aiapp.RunnerRequest
-	data, err := io.ReadAll(io.LimitReader(reader, maxInputBytes+1))
-	if err != nil {
-		return in, err
-	}
-	if len(data) > maxInputBytes {
-		return in, fmt.Errorf("runner input exceeds 96 KiB")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
+func decodeRequest(reader io.Reader) (programrunner.Request, error) {
+	var in programrunner.Request
+	err := decodeOneJSON(reader, &in)
+	return in, err
+}
+
+func decodeOneJSON(reader io.Reader, value any) error {
+	decoder := json.NewDecoder(reader)
 	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&in); err != nil {
-		return in, err
+	if err := decoder.Decode(value); err != nil {
+		return err
 	}
-	if err = decoder.Decode(&struct{}{}); err != io.EOF {
-		return in, fmt.Errorf("runner accepts one JSON request")
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("runner accepts one JSON request")
 	}
-	return in, nil
+	return nil
 }
-func capLimits(in, max engine.ProgramLimits) engine.ProgramLimits {
-	if in.MaxRequests <= 0 || in.MaxRequests > max.MaxRequests {
-		in.MaxRequests = max.MaxRequests
+
+func capLimits(in, host engine.ProgramLimits) engine.ProgramLimits {
+	if host.Timeout > 0 && (in.Timeout <= 0 || in.Timeout > host.Timeout) {
+		in.Timeout = host.Timeout
 	}
-	if in.MaxBytes <= 0 || in.MaxBytes > max.MaxBytes {
-		in.MaxBytes = max.MaxBytes
+	if host.MaxRequests > 0 && (in.MaxRequests <= 0 || in.MaxRequests > host.MaxRequests) {
+		in.MaxRequests = host.MaxRequests
 	}
-	if in.MaxItems <= 0 || in.MaxItems > max.MaxItems {
-		in.MaxItems = max.MaxItems
+	if host.MaxBytes > 0 && (in.MaxBytes <= 0 || in.MaxBytes > host.MaxBytes) {
+		in.MaxBytes = host.MaxBytes
 	}
-	if in.MaxOutputBytes <= 0 || in.MaxOutputBytes > max.MaxOutputBytes {
-		in.MaxOutputBytes = max.MaxOutputBytes
+	if host.MaxItems > 0 && (in.MaxItems <= 0 || in.MaxItems > host.MaxItems) {
+		in.MaxItems = host.MaxItems
 	}
-	if in.Timeout <= 0 || in.Timeout > max.Timeout {
-		in.Timeout = max.Timeout
+	if host.MaxOutputBytes > 0 && (in.MaxOutputBytes <= 0 || in.MaxOutputBytes > host.MaxOutputBytes) {
+		in.MaxOutputBytes = host.MaxOutputBytes
 	}
 	return in
 }
-func classifyError(err error) *aiapp.RunnerError {
+
+func classifyError(err error) *programrunner.Error {
+	var ge *fetchgov.GovernanceError
+	if errors.As(err, &ge) && strings.TrimSpace(ge.Code) != "" {
+		return &programrunner.Error{
+			Code:    strings.ToLower(strings.TrimSpace(ge.Code)),
+			Message: ge.Error(),
+		}
+	}
 	code := "execution_failed"
 	switch {
-	case errors.Is(err, acquisition.ErrBudgetExceeded), errors.Is(err, errChildMemoryBudget):
+	case errors.Is(err, errChildMemoryBudget):
+		code = "memory_limit"
+	case errors.Is(err, acquisition.ErrBudgetExceeded):
 		code = "budget_exceeded"
 	case errors.Is(err, acquisition.ErrNotAllowed):
 		code = "permission_denied"
@@ -128,18 +181,72 @@ func classifyError(err error) *aiapp.RunnerError {
 	case errors.Is(err, context.Canceled):
 		code = "cancelled"
 	}
-	return &aiapp.RunnerError{Code: code, Message: err.Error()}
+	return &programrunner.Error{Code: code, Message: err.Error()}
 }
 
-func runnerHandler(token string, limits engine.ProgramLimits, execute func(context.Context, aiapp.RunnerRequest) (aiapp.RunnerResponse, error)) http.Handler {
+func configuredRunnerConcurrency() int {
+	if raw := os.Getenv("GORELAY_RUNNER_CONCURRENCY"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 8
+}
+
+func runnerHandler(token string, limits engine.ProgramLimits, execute func(context.Context, programrunner.Request) (programrunner.Response, error)) http.Handler {
 	mux := http.NewServeMux()
-	slot := make(chan struct{}, 1)
+	slot := make(chan struct{}, configuredRunnerConcurrency())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
-	mux.HandleFunc("POST /execute", func(w http.ResponseWriter, r *http.Request) {
+	auth := func(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Content-Type", "application/json")
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
 			w.WriteHeader(401)
-			json.NewEncoder(w).Encode(aiapp.RunnerResponse{Error: &aiapp.RunnerError{Code: "unauthorized", Message: "runner token required"}})
+			json.NewEncoder(w).Encode(programrunner.Response{Error: &programrunner.Error{Code: "unauthorized", Message: "runner token required"}})
+			return false
+		}
+		return true
+	}
+	var batchesMu sync.RWMutex
+	batches := map[string]map[string]acquisition.Response{}
+	mux.HandleFunc("POST /snapshot-batch", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		controller := http.NewResponseController(w)
+		batchReadTimeout := 60 * time.Second
+		if limits.Timeout > 0 && limits.Timeout > batchReadTimeout {
+			batchReadTimeout = limits.Timeout
+		}
+		_ = controller.SetReadDeadline(time.Now().Add(batchReadTimeout))
+		var snapshots map[string]acquisition.Response
+		if err := decodeOneJSON(r.Body, &snapshots); err != nil || len(snapshots) == 0 {
+			http.Error(w, "snapshot batch requires a nonempty map", http.StatusBadRequest)
+			return
+		}
+		if err := controller.SetReadDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			http.Error(w, "snapshot connection unavailable", http.StatusInternalServerError)
+			return
+		}
+		_ = controller.SetWriteDeadline(time.Time{})
+		id := contract.RandomToken()
+		batchesMu.Lock()
+		batches[id] = snapshots
+		batchesMu.Unlock()
+		defer func() {
+			batchesMu.Lock()
+			delete(batches, id)
+			batchesMu.Unlock()
+		}()
+		if err := json.NewEncoder(w).Encode(map[string]string{"id": id}); err != nil {
+			return
+		}
+		if err := controller.Flush(); err != nil {
+			return
+		}
+		<-r.Context().Done()
+	})
+	mux.HandleFunc("POST /execute", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
 			return
 		}
 		select {
@@ -147,16 +254,29 @@ func runnerHandler(token string, limits engine.ProgramLimits, execute func(conte
 			defer func() { <-slot }()
 		default:
 			w.WriteHeader(503)
-			json.NewEncoder(w).Encode(aiapp.RunnerResponse{Error: &aiapp.RunnerError{Code: "busy", Message: "runner is executing another program"}})
+			json.NewEncoder(w).Encode(programrunner.Response{Error: &programrunner.Error{Code: "busy", Message: "runner is executing another program"}})
 			return
 		}
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(30 * time.Second))
 		in, err := decodeRequest(r.Body)
 		if err != nil {
 			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(aiapp.RunnerResponse{Error: classifyError(err)})
+			json.NewEncoder(w).Encode(programrunner.Response{Error: classifyError(err)})
 			return
 		}
 		in.Limits = capLimits(in.Limits, limits)
+		in.SnapshotReferences = r.Header.Get(programrunner.SnapshotReferencesHeader) == "1"
+		if batch := r.Header.Get(programrunner.SnapshotBatchHeader); batch != "" {
+			batchesMu.RLock()
+			snapshots := batches[batch]
+			batchesMu.RUnlock()
+			if snapshots == nil {
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(programrunner.Response{Error: &programrunner.Error{Code: "snapshot_batch_unavailable", Message: "snapshot batch is no longer connected"}})
+				return
+			}
+			in.Snapshots = snapshots
+		}
 		out, err := execute(r.Context(), in)
 		if err != nil {
 			out.Error = classifyError(err)
@@ -175,60 +295,124 @@ type boundedBuffer struct {
 }
 
 func (b *boundedBuffer) Write(p []byte) (int, error) {
-	if b.Len()+len(p) > b.limit {
+	if b.limit > 0 && b.Len()+len(p) > b.limit {
 		return 0, fmt.Errorf("child output limit exceeded")
 	}
 	return b.Buffer.Write(p)
 }
-func executeChild(parent context.Context, in aiapp.RunnerRequest) (aiapp.RunnerResponse, error) {
-	var out aiapp.RunnerResponse
+
+func executeChild(parent context.Context, in programrunner.Request) (programrunner.Response, error) {
+	return executeChildWithClient(parent, in, nil)
+}
+
+func executeChildWithClient(parent context.Context, in programrunner.Request, sharedClient *fetchgov.SafeClient) (programrunner.Response, error) {
+	var out programrunner.Response
+	memoryBytes, err := childMemoryBudget()
+	if err != nil {
+		return out, err
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		return out, err
 	}
-	ctx, cancel := context.WithTimeout(parent, in.Limits.Timeout+2*time.Second)
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	if in.Limits.Timeout > 0 {
+		var deadlineCancel context.CancelFunc
+		ctx, deadlineCancel = context.WithTimeout(ctx, in.Limits.Timeout+2*time.Second)
+		defer deadlineCancel()
+	}
+	// Keep snapshots, checkpoint callback secrets, and AuthProfile metadata in
+	// the parent. When sharedClient != nil, the child runs in zero-socket IPC
+	// mode and proxies every http_request/http_render/checkpoint frame over pipes.
+	reqMeta := in
+	snapshots := in.Snapshots
+	in.Snapshots = nil
+	cbURL := in.CheckpointCallbackURL
+	cbToken := in.CheckpointCallbackToken
+	in.CheckpointCallbackURL = ""
+	in.CheckpointCallbackToken = ""
+	usePipe := sharedClient != nil || len(snapshots) > 0 || cbURL != "" || in.HasCheckpoint
+	if usePipe && cbURL != "" {
+		in.HasCheckpoint = true
+	}
+	if sharedClient != nil {
+		in.AuthProfile = ""
+	}
 	payload, err := json.Marshal(in)
 	if err != nil {
 		return out, err
 	}
-	cmd := exec.CommandContext(ctx, executable, "-child")
+	args := []string{"-child"}
+	if usePipe {
+		args = append(args, "-snapshot-pipe")
+	}
+	cmd := exec.CommandContext(ctx, executable, args...)
+	prepareChildCmd(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return out, err
 	}
-	// Do not inherit model/search keys or the runner token into code processes.
-	cmd.Env = []string{"GOMEMLIMIT=96MiB", "GOGC=50"}
-	// Network routing is a trusted host setting, not a Lua-visible credential.
-	// Pass only the configured proxy; model/search keys and runner token stay out.
-	if proxy := os.Getenv("GORELAY_ACQUISITION_PROXY"); proxy != "" {
-		cmd.Env = append(cmd.Env, "GORELAY_ACQUISITION_PROXY="+proxy)
+	// Never inherit runner token, DB/Redis DSNs, or AuthProfile secrets into child processes.
+	cmd.Env = []string{}
+	for _, name := range []string{"GOMEMLIMIT", "GOGC"} {
+		if value := os.Getenv(name); value != "" {
+			cmd.Env = append(cmd.Env, name+"="+value)
+		}
+	}
+	// Only pass proxy to direct-socket fallback; host-IPC children make zero outbound sockets.
+	if !usePipe {
+		if proxy := os.Getenv("GORELAY_ACQUISITION_PROXY"); proxy != "" {
+			cmd.Env = append(cmd.Env, "GORELAY_ACQUISITION_PROXY="+proxy)
+		}
 	}
 	if root := os.Getenv("SystemRoot"); root != "" {
 		cmd.Env = append(cmd.Env, "SystemRoot="+root)
 	}
-	stdout := &boundedBuffer{limit: int(aiapp.RunnerResponseByteLimit(in.Limits))}
+	stdout := &boundedBuffer{limit: int(programrunner.ResponseByteLimit(in.Limits))}
 	stderr := &boundedBuffer{limit: 4096}
-	cmd.Stdout = stdout
+	var pipeOutput io.ReadCloser
+	if usePipe {
+		pipeOutput, err = cmd.StdoutPipe()
+		if err != nil {
+			_ = stdin.Close()
+			return out, err
+		}
+		defer pipeOutput.Close()
+	} else {
+		cmd.Stdout = stdout
+	}
 	cmd.Stderr = stderr
 	if err = cmd.Start(); err != nil {
 		stdin.Close()
 		return out, err
 	}
-	isolation, limitErr := isolateChild(cmd.Process)
+	isolation, limitErr := isolateChild(cmd.Process, memoryBytes)
 	if limitErr != nil {
 		stdin.Close()
-		_ = cmd.Process.Kill()
+		killProcessTree(cmd)
 		_ = cmd.Wait()
 		return out, fmt.Errorf("child isolation unavailable: %w", limitErr)
 	}
 	defer isolation.Close()
-	_, writeErr := stdin.Write(payload)
+	var protocolErr error
+	if pipeOutput != nil {
+		cpHooks := makeHTTPCallbackHooks(cbURL, cbToken)
+		out, protocolErr = exchangeChildPipeWithHost(ctx, stdin, pipeOutput, reqMeta, payload, snapshots, programrunner.ResponseByteLimit(in.Limits), cpHooks, sharedClient)
+	} else {
+		_, protocolErr = stdin.Write(payload)
+	}
 	_ = stdin.Close()
-	if writeErr != nil {
-		_ = cmd.Process.Kill()
+	if protocolErr != nil {
+		killProcessTree(cmd)
 		_ = cmd.Wait()
-		return out, writeErr
+		if ctx.Err() != nil {
+			return out, ctx.Err()
+		}
+		if resourceErr := isolation.Err(); resourceErr != nil {
+			return out, fmt.Errorf("runner child terminated: %w", resourceErr)
+		}
+		return out, protocolErr
 	}
 	err = cmd.Wait()
 	isolation.Close()
@@ -241,8 +425,10 @@ func executeChild(parent context.Context, in aiapp.RunnerRequest) (aiapp.RunnerR
 	if err != nil {
 		return out, fmt.Errorf("runner child terminated: %w", err)
 	}
-	if err = json.Unmarshal(stdout.Bytes(), &out); err != nil {
-		return out, fmt.Errorf("runner child returned invalid JSON: %w", err)
+	if pipeOutput == nil {
+		if err = json.Unmarshal(stdout.Bytes(), &out); err != nil {
+			return out, fmt.Errorf("runner child returned invalid JSON: %w", err)
+		}
 	}
 	return out, nil
 }

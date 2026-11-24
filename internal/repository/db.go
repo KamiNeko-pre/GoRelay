@@ -4,11 +4,9 @@ import (
 	"errors"
 	"fmt"
 	mysqldriver "github.com/go-sql-driver/mysql"
-	"go-lua-crawler/internal/agentdata"
-	"go-lua-crawler/internal/config"
-	"go-lua-crawler/internal/knowledge"
-	"go-lua-crawler/internal/logger"
-	taskmodel "go-lua-crawler/internal/task"
+	"gorelay/internal/config"
+	"gorelay/internal/logger"
+	taskmodel "gorelay/internal/task"
 	"go.uber.org/zap"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -22,19 +20,16 @@ import (
 
 var DB *gorm.DB
 
-func InitDB() error {
-	// 数据库配置在启动时读取一次。GORM 连接成功后由任务、分析和执行链路共享使用。
-	cfg := config.Get()
+// ExtraMigrator registers additional module models for AutoMigrate at DB startup.
+var ExtraMigrator func(*gorm.DB) error
 
+func InitDB() error {
+	cfg := config.Get()
 	dsn := cfg.MySQL.DSN
 
-	// 空白 DSN 代表数据库配置缺失，应在启动阶段直接失败，
-	// 而不是构造无效的 MySQL 连接参数并把问题拖到后续连接阶段。
 	if err := validateMySQLDSN(dsn); err != nil {
 		return fmt.Errorf("validate MySQL DSN: %w", err)
 	}
-	// Transaction Commit has no context parameter in database/sql. Bound the
-	// transport as well, so a lost COMMIT reply cannot block shutdown forever.
 	parsedDSN, err := mysqldriver.ParseDSN(dsn)
 	if err != nil {
 		return fmt.Errorf("parse MySQL DSN: %w", err)
@@ -62,17 +57,14 @@ func InitDB() error {
 	sqlDB.SetMaxIdleConns(cfg.MySQL.MaxIdleConns)
 	sqlDB.SetMaxOpenConns(cfg.MySQL.MaxOpenConns)
 
-	// AutoMigrate 会创建缺失的表和索引，但不会执行破坏性删除，
-	// 适合开发阶段保持模型与表结构同步。
-	if err := db.AutoMigrate(&taskmodel.CrawlTask{}, &taskmodel.TaskOutbox{}, &taskmodel.TaskEvent{}, &CrawlResult{}); err != nil {
+	if err := AutoMigrate(db, &taskmodel.CrawlTask{}, &taskmodel.TaskOutbox{}, &taskmodel.TaskEvent{}); err != nil {
 		return fmt.Errorf("建表失败: %w", err)
 	}
 	DB = db
-	if err := agentdata.NewStore(db).Migrate(); err != nil {
-		return fmt.Errorf("migrate Agent facts: %w", err)
-	}
-	if err := knowledge.NewStore(db).Migrate(); err != nil {
-		return fmt.Errorf("migrate knowledge index: %w", err)
+	if ExtraMigrator != nil {
+		if err := ExtraMigrator(db); err != nil {
+			return fmt.Errorf("migrate extra models: %w", err)
+		}
 	}
 	logger.Log.Info("数据库表结构同步完成")
 	return nil

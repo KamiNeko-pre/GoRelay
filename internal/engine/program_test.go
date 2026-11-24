@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"go-lua-crawler/internal/acquisition"
+	"gorelay/internal/acquisition"
 )
 
 func TestProgramPaginationAndTypedResult(t *testing.T) {
@@ -30,13 +30,13 @@ func TestProgramPaginationAndTypedResult(t *testing.T) {
 	}
 }
 
-func TestProgramBudgetCannotBeCaughtOrIgnored(t *testing.T) {
+func TestProgramIgnoresLegacyByteQuota(t *testing.T) {
 	fetch := func(context.Context, string, string) (acquisition.Response, error) {
 		return acquisition.Response{Body: "12345"}, nil
 	}
-	_, err := RunProgram(context.Background(), ProgramRequest{Code: `pcall(function() http_get("https://example.com") end); return true,{items={}}`}, ProgramLimits{Timeout: time.Second, MaxRequests: 1, MaxBytes: 4, MaxItems: 5, MaxOutputBytes: 4096}, fetch)
-	if !errors.Is(err, acquisition.ErrBudgetExceeded) {
-		t.Fatalf("program hid hard budget error: %v", err)
+	_, err := RunProgram(context.Background(), ProgramRequest{Code: `assert(http_get("https://example.com")); return true,{items={}}`}, ProgramLimits{Timeout: time.Second, MaxRequests: 1, MaxBytes: 4, MaxItems: 5, MaxOutputBytes: 4096}, fetch)
+	if err != nil {
+		t.Fatalf("legacy byte quota blocked valid execution: %v", err)
 	}
 }
 
@@ -64,15 +64,49 @@ func TestProgramHasNoWriteOrHostLibrariesAndStopsLoop(t *testing.T) {
 	}
 }
 
-func TestProgramOutputLimitAndParameters(t *testing.T) {
+func TestProgramOutputAndParameters(t *testing.T) {
 	limits := ProgramLimits{Timeout: time.Second, MaxRequests: 1, MaxBytes: 1024, MaxItems: 1, MaxOutputBytes: 4096}
 	_, err := RunProgram(context.Background(), ProgramRequest{Code: `return true,{items={{x=PARAMS.x},{x=2}}}`, Params: map[string]any{"x": "value"}}, limits, nil)
-	if err == nil {
-		t.Fatal("item cap missing")
+	if err != nil {
+		t.Fatalf("legacy item quota blocked valid output: %v", err)
 	}
 	limits.MaxItems = 3
 	got, err := RunProgram(context.Background(), ProgramRequest{Code: `return true,{items={{x=PARAMS.x}}}`, Params: map[string]any{"x": "value"}}, limits, nil)
 	if err != nil || got.Collection["items"].([]any)[0].(map[string]any)["x"] != "value" {
 		t.Fatalf("params not bound: %+v %v", got, err)
+	}
+}
+
+func TestProgramRequestFailureDoesNotPoisonRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name, code  string
+		wantRows    int
+		wantFailure bool
+	}{
+		{"fallback", `local body,err=http_get("https://invalid.example/"); if not body then body,err=http_get("https://public.example/") end; assert(body,err); return true,{items={{body=body}}}`, 1, false},
+		{"skip_unavailable", `local items={}; for _,url in ipairs({"https://invalid.example/","https://public.example/"}) do local body=http_get(url); if body then table.insert(items,{body=body}) end end; return true,{items=items}`, 1, false},
+		{"unhandled", `local body,err=http_get("https://invalid.example/"); assert(body,err); return true,{items={}}`, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fetch := func(_ context.Context, _ string, url string) (acquisition.Response, error) {
+				if strings.Contains(url, "invalid.example") {
+					return acquisition.Response{}, acquisition.ErrNotAllowed
+				}
+				return acquisition.Response{Body: "observed", Receipt: acquisition.Receipt{URL: url, Status: 200, FetchedAt: time.Now()}}, nil
+			}
+			got, err := RunProgram(context.Background(), ProgramRequest{Code: tc.code}, DefaultProgramLimits(), fetch)
+			if tc.wantFailure {
+				if !errors.Is(err, acquisition.ErrNotAllowed) {
+					t.Fatalf("lost original cause: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("handled request prevented valid work: %v", err)
+			}
+			if len(got.Collection["items"].([]any)) != tc.wantRows {
+				t.Fatalf("missing recovered output: %+v", got)
+			}
+		})
 	}
 }

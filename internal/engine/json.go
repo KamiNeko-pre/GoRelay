@@ -32,10 +32,20 @@ func JSONDecode(L *lua.LState) int {
 	return 1
 }
 
-func jsonValueToLua(L *lua.LState, value any, depth int) (lua.LValue, error) {
-	if depth > 32 {
-		return lua.LNil, fmt.Errorf("decode JSON: value exceeds 32 nesting levels")
+func JSONEncode(L *lua.LState) int {
+	val, err := luaJSON(L.Get(1), map[*lua.LTable]bool{}, strictCollectionNode)
+	if err != nil {
+		return pushLuaError(L, fmt.Errorf("encode JSON: %w", err))
 	}
+	encoded, err := json.Marshal(val)
+	if err != nil {
+		return pushLuaError(L, fmt.Errorf("encode JSON: %w", err))
+	}
+	L.Push(lua.LString(string(encoded)))
+	return 1
+}
+
+func jsonValueToLua(L *lua.LState, value any, depth int) (lua.LValue, error) {
 
 	switch typed := value.(type) {
 	case nil:

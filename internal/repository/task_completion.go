@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	taskmodel "go-lua-crawler/internal/task"
+	taskmodel "gorelay/internal/task"
 
 	"gorm.io/gorm"
 )

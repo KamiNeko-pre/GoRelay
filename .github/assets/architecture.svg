@@ -1,28 +1,104 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
-<title id="title">GoRelay 的三层架构</title><desc id="desc">Agent 负责规划、工具构建和修复；Go 执行层负责可靠调度、隔离执行与故障接管；数据层保存结构化数据及来源证据，并独立建立索引。执行反馈回到 Agent，推动按需修复。</desc>
-<rect x="1" y="1" width="1198" height="418" rx="12" fill="#f6f9fa" stroke="#dce5e7"/>
-<g font-family="Segoe UI,Microsoft YaHei,Noto Sans CJK SC,sans-serif">
-<text x="40" y="43" font-size="16" font-weight="600" fill="#445e65">一个目标，从能力构建走向持续交付</text>
-<path d="M40 63h1120" stroke="#dce5e7"/>
-<g fill="#fff" stroke="#ccdadd"><rect x="40" y="88" width="338" height="234" rx="10"/><rect x="431" y="88" width="338" height="234" rx="10"/><rect x="822" y="88" width="338" height="234" rx="10"/></g>
-<circle cx="68" cy="118" r="5" fill="#176b65"/><text x="84" y="124" font-size="15" font-weight="600" fill="#176b65">AGENT</text>
-<text x="62" y="164" font-size="24" font-weight="700" fill="#19343d">规划与工具构建</text>
-<text x="62" y="200" font-size="17" fill="#405b63">目标理解 → 观察 → 行动 → 检查</text>
-<text x="62" y="229" font-size="17" fill="#405b63">Lua 生成、验证与工具注册</text>
-<text x="62" y="258" font-size="17" fill="#405b63">执行反馈纠错 · 停滞检测</text>
-<path d="M62 277h294" stroke="#e3eaec"/><text x="62" y="303" font-size="14" fill="#526b72">Agent Loop · Code as Action</text>
-<circle cx="459" cy="118" r="5" fill="#2c5f9c"/><text x="475" y="124" font-size="15" font-weight="600" fill="#2c5f9c">EXECUTION</text>
-<text x="453" y="164" font-size="24" font-weight="700" fill="#19343d">可靠调度与执行</text>
-<text x="453" y="200" font-size="17" fill="#405b63">API / Lua / 按需授权 Browser</text>
-<text x="453" y="229" font-size="17" fill="#405b63">Outbox → Redis Streams → Worker</text>
-<text x="453" y="258" font-size="17" fill="#405b63">隔离 Runner · 租约与故障接管</text>
-<path d="M453 277h294" stroke="#e3eaec"/><text x="453" y="303" font-size="14" fill="#526b72">已验证的工具交给 Go 重复执行</text>
-<circle cx="850" cy="118" r="5" fill="#8a5a24"/><text x="866" y="124" font-size="15" font-weight="600" fill="#8a5a24">KNOWLEDGE</text>
-<text x="844" y="164" font-size="24" font-weight="700" fill="#19343d">数据沉淀与检索</text>
-<text x="844" y="200" font-size="17" fill="#405b63">结构化记录 · 来源与版本</text>
-<text x="844" y="229" font-size="17" fill="#405b63">独立索引 · BM25 / 向量 / RRF</text>
-<text x="844" y="258" font-size="17" fill="#405b63">证据检索 · 原文引用与追溯</text>
-<path d="M844 277h294" stroke="#e3eaec"/><text x="844" y="303" font-size="14" fill="#526b72">RAG 与采集执行独立运行</text>
-<g fill="none" stroke="#7f969c" stroke-width="2"><path d="M386 208h36m-6-5 6 5-6 5M777 208h36m-6-5 6 5-6 5"/><path d="M600 334v38H209v-31m-5 6 5-6 5 6" stroke-dasharray="5 5"/></g>
-<rect x="290" y="358" width="230" height="27" rx="4" fill="#f6f9fa"/><text x="405" y="378" text-anchor="middle" font-size="15" fill="#526b72">执行反馈与来源变化，按需修复</text>
-</g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title desc">
+  <title id="title">GoRelay 进程与数据流拓扑</title>
+  <desc id="desc">展示 MCP Client、app 服务、MySQL、publisher、Redis Streams、worker、lua-runner 子进程、SafeClient 与外部目标源之间的运行拓扑。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M1 2l7 3-7 3z" fill="#64748b"/>
+    </marker>
+    <marker id="arrowTeal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M1 2l7 3-7 3z" fill="#0f766e"/>
+    </marker>
+  </defs>
+
+  <rect x="0.75" y="0.75" width="1198.5" height="428.5" rx="12" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
+    <!-- Header & Legend -->
+    <text x="32" y="36" fill="#0f172a" font-size="15" font-weight="600">运行拓扑与进程边界</text>
+    <line x1="774" y1="31" x2="804" y2="31" stroke="#0f766e" stroke-width="2" stroke-dasharray="5 3"/>
+    <text x="812" y="35" fill="#475569" font-size="12.5">缓存直读 / 视图查询</text>
+    <line x1="948" y1="31" x2="978" y2="31" stroke="#64748b" stroke-width="1.8"/>
+    <text x="986" y="35" fill="#475569" font-size="12.5">异步调度与隔离抓取</text>
+    <path d="M32 52h1136" stroke="#f1f5f9" stroke-width="1.5"/>
+
+    <!-- Group Background: GoRelay Docker Stack -->
+    <rect x="210" y="68" width="790" height="332" rx="10" fill="#f8fafc" stroke="#e2e8f0" stroke-dasharray="4 4"/>
+    <text x="228" y="90" fill="#64748b" font-size="11.5" font-weight="600" font-family="ui-monospace,Consolas,monospace">GoRelay Stack (Docker Compose)</text>
+
+    <!-- Node 1: MCP Client (Outside Stack, Left) -->
+    <rect x="28" y="182" width="144" height="96" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+    <text x="100" y="216" text-anchor="middle" fill="#0f172a" font-size="15.5" font-weight="700">MCP Client</text>
+    <text x="100" y="240" text-anchor="middle" fill="#475569" font-size="12.5">Claude Code</text>
+    <text x="100" y="260" text-anchor="middle" fill="#475569" font-size="12.5">Cursor / Codex</text>
+
+    <!-- Node 2: app (:8080) -->
+    <rect x="230" y="168" width="154" height="124" rx="8" fill="#ffffff" stroke="#0f766e" stroke-width="1.8"/>
+    <text x="307" y="196" text-anchor="middle" fill="#0f766e" font-size="11.5" font-weight="700" font-family="ui-monospace,Consolas,monospace">app :8080</text>
+    <text x="307" y="220" text-anchor="middle" fill="#0f172a" font-size="15" font-weight="700">MCP 与管理入口</text>
+    <text x="307" y="245" text-anchor="middle" fill="#475569" font-size="12">固定 6 工具 · 试跑校验</text>
+    <text x="307" y="266" text-anchor="middle" fill="#475569" font-size="12">多视图查询 · 流式导出</text>
+
+    <!-- Node 3: MySQL + Snapshots (Bottom Center) -->
+    <rect x="430" y="276" width="214" height="104" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.3"/>
+    <text x="537" y="302" text-anchor="middle" fill="#475569" font-size="11.5" font-weight="700" font-family="ui-monospace,Consolas,monospace">MySQL 8.4 + Disk</text>
+    <text x="537" y="325" text-anchor="middle" fill="#0f172a" font-size="14.5" font-weight="700">连接器 · 记录 · 快照</text>
+    <text x="537" y="348" text-anchor="middle" fill="#475569" font-size="12">版本表 · Outbox · source_records</text>
+    <text x="537" y="367" text-anchor="middle" fill="#64748b" font-size="11.5">SHA-256 Gzip 归档 + BM25</text>
+
+    <!-- Node 4: Publisher + Redis Streams (Top Center) -->
+    <rect x="430" y="106" width="214" height="114" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.3"/>
+    <text x="537" y="132" text-anchor="middle" fill="#475569" font-size="11.5" font-weight="700" font-family="ui-monospace,Consolas,monospace">publisher → redis 7.4</text>
+    <text x="537" y="156" text-anchor="middle" fill="#0f172a" font-size="14.5" font-weight="700">Outbox 投递与队列</text>
+    <text x="537" y="180" text-anchor="middle" fill="#475569" font-size="12">100ms 轮询补投 · Redis Streams</text>
+    <text x="537" y="201" text-anchor="middle" fill="#64748b" font-size="11.5">消费组 + PEL 超时重试</text>
+
+    <!-- Node 5: Worker + Sandbox (Top Right inside Stack) -->
+    <rect x="692" y="106" width="288" height="128" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.3"/>
+    <text x="836" y="132" text-anchor="middle" fill="#475569" font-size="11.5" font-weight="700" font-family="ui-monospace,Consolas,monospace">worker + lua-runner (-child)</text>
+    <text x="836" y="156" text-anchor="middle" fill="#0f172a" font-size="14.5" font-weight="700">可靠执行与进程沙箱</text>
+    <text x="836" y="180" text-anchor="middle" fill="#475569" font-size="12">租约续期 · XAUTOCLAIM · CAS 断点续跑</text>
+    <text x="836" y="201" text-anchor="middle" fill="#475569" font-size="12">http_api 执行器 | 只读 FS 无密钥 Lua 沙箱</text>
+    <text x="836" y="221" text-anchor="middle" fill="#64748b" font-size="11.5">落库前经 Drift 门禁校验，异常回滚不覆写旧数据</text>
+
+    <!-- Node 6: SafeClient Proxy (Bottom Right inside Stack) -->
+    <rect x="692" y="276" width="288" height="104" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.4"/>
+    <text x="836" y="302" text-anchor="middle" fill="#0f766e" font-size="11.5" font-weight="700" font-family="ui-monospace,Consolas,monospace">SafeClient (Shared Outbound)</text>
+    <text x="836" y="325" text-anchor="middle" fill="#0f172a" font-size="14.5" font-weight="700">统一出网代理与护栏</text>
+    <text x="836" y="348" text-anchor="middle" fill="#334155" font-size="12">SSRF 阻断 · robots.txt · 单域名限速</text>
+    <text x="836" y="367" text-anchor="middle" fill="#475569" font-size="12">429 熔断 · 5 MiB 上限 · 域名凭据注入</text>
+
+    <!-- Node 7: External Target Sites (Outside Stack, Far Right) -->
+    <rect x="1032" y="276" width="140" height="104" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+    <text x="1102" y="314" text-anchor="middle" fill="#0f172a" font-size="15" font-weight="700">外部目标源</text>
+    <text x="1102" y="338" text-anchor="middle" fill="#475569" font-size="12.5">公开 JSON API</text>
+    <text x="1102" y="358" text-anchor="middle" fill="#475569" font-size="12.5">静态 / 动态网页</text>
+
+    <!-- Connectors -->
+    <!-- Client <-> app -->
+    <path d="M174 230h50" stroke="#64748b" stroke-width="1.8" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <text x="199" y="220" text-anchor="middle" fill="#64748b" font-size="11" font-family="ui-monospace,Consolas,monospace">MCP</text>
+
+    <!-- app -> MySQL (write task+outbox / fast cache read) -->
+    <path d="M307 292v36h118" fill="none" stroke="#0f766e" stroke-width="1.8" stroke-dasharray="5 3" marker-start="url(#arrowTeal)" marker-end="url(#arrowTeal)"/>
+    <text x="364" y="345" text-anchor="middle" fill="#0f766e" font-size="11.5">读写缓存 / 下单</text>
+
+    <!-- MySQL Outbox -> Publisher/Redis -->
+    <path d="M537 274v-49" fill="none" stroke="#64748b" stroke-width="1.8" marker-end="url(#arrow)"/>
+    <text x="583" y="253" text-anchor="middle" fill="#64748b" font-size="11">Outbox 捞取</text>
+
+    <!-- Redis -> Worker -->
+    <path d="M646 163h41" fill="none" stroke="#64748b" stroke-width="1.8" marker-end="url(#arrow)"/>
+
+    <!-- Worker -> MySQL (Drift checked commit) -->
+    <path d="M690 212l-44 82" fill="none" stroke="#64748b" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <text x="674" y="264" fill="#64748b" font-size="11">入库</text>
+
+    <!-- Worker <-> SafeClient (IPC) -->
+    <path d="M836 238v33" fill="none" stroke="#64748b" stroke-width="1.8" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <text x="874" y="258" fill="#64748b" font-size="11" font-family="ui-monospace,Consolas,monospace">IPC 代理</text>
+
+    <!-- SafeClient <-> External Target -->
+    <path d="M982 328h45" fill="none" stroke="#64748b" stroke-width="1.8" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <text x="1005" y="318" text-anchor="middle" fill="#64748b" font-size="10.5" font-family="ui-monospace,Consolas,monospace">HTTP</text>
+  </g>
+</svg>

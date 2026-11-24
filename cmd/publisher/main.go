@@ -8,11 +8,11 @@ import (
 	"syscall"
 	"time"
 
-	"go-lua-crawler/internal/config"
-	"go-lua-crawler/internal/logger"
-	"go-lua-crawler/internal/queue"
-	"go-lua-crawler/internal/repository"
-	"go-lua-crawler/internal/service"
+	"gorelay/internal/config"
+	"gorelay/internal/logger"
+	"gorelay/internal/queue"
+	"gorelay/internal/repository"
+	"gorelay/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -70,6 +70,9 @@ func runPublisherLoop(
 			log.Error("Outbox batch failed; unpublished rows will be retried", zap.Int("published_count", count), zap.Error(err))
 		} else if count > 0 {
 			log.Info("Outbox batch published", zap.Int("published_count", count))
+			if count >= cfg.BatchSize {
+				continue
+			}
 		}
 		select {
 		case <-ctx.Done():

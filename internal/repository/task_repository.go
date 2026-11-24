@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	taskmodel "go-lua-crawler/internal/task"
+	taskmodel "gorelay/internal/task"
 	"gorm.io/gorm"
 	"time"
 )
@@ -49,22 +49,31 @@ func CreateCrawlTask(ctx context.Context, crawlTask *taskmodel.CrawlTask) error 
 }
 
 // CreateQueuedCrawlTaskWithOutbox atomically creates a queued task and its
-// unpublished Outbox record.
+// unpublished Outbox record using the global repository DB.
 func CreateQueuedCrawlTaskWithOutbox(
 	ctx context.Context,
 	crawlTask *taskmodel.CrawlTask,
 ) error {
+	return CreateQueuedCrawlTaskWithOutboxOn(ctx, DB, crawlTask)
+}
+
+// CreateQueuedCrawlTaskWithOutboxOn atomically creates a queued task and Outbox row on db.
+func CreateQueuedCrawlTaskWithOutboxOn(
+	ctx context.Context,
+	db *gorm.DB,
+	crawlTask *taskmodel.CrawlTask,
+) error {
+	if db == nil {
+		return fmt.Errorf("repository DB is required")
+	}
 	if crawlTask == nil {
 		return fmt.Errorf("crawl task is required")
 	}
 	queuedAt := time.Now()
 	crawlTask.Status = taskmodel.StatusQueued
 	crawlTask.QueuedAt = &queuedAt
-	return DB.WithContext(ctx).Transaction(
+	return db.WithContext(ctx).Transaction(
 		func(tx *gorm.DB) error {
-			if err := snapshotKnownRule(ctx, tx, crawlTask); err != nil {
-				return fmt.Errorf("snapshot accepted rule: %w", err)
-			}
 			if err := tx.Create(crawlTask).Error; err != nil {
 				return fmt.Errorf("create queued crawl task: %w", err)
 			}

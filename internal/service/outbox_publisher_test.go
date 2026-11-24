@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"go-lua-crawler/internal/config"
-	"go-lua-crawler/internal/queue"
-	"go-lua-crawler/internal/repository"
-	taskmodel "go-lua-crawler/internal/task"
+	"gorelay/internal/config"
+	"gorelay/internal/queue"
+	"gorelay/internal/repository"
+	taskmodel "gorelay/internal/task"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -93,7 +93,7 @@ func TestOutboxPublisherIntegration(t *testing.T) {
 	})
 	create := func() uint64 {
 		t.Helper()
-		task := taskmodel.CrawlTask{RequestKey: fmt.Sprintf("%s:%d", stream, len(taskIDs)), Target: "test", URL: "https://example.com"}
+		task := taskmodel.CrawlTask{RequestKey: fmt.Sprintf("%s:%d", stream, len(taskIDs)), SourceID: "test", URL: "https://example.com"}
 		if err := repository.CreateQueuedCrawlTaskWithOutbox(ctx, &task); err != nil {
 			t.Fatal(err)
 		}

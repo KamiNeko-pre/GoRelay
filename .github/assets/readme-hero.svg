@@ -1,29 +1,62 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="330" viewBox="0 0 1200 330" role="img" aria-labelledby="title desc">
-<title id="title">GoRelay — 让 Agent 构建工具，让代码持续执行</title>
-<desc id="desc">Go 与 Lua 驱动的 Agent 系统：从任务目标，构建可复用工具，再交付数据与知识。</desc>
-<rect width="1200" height="330" rx="16" fill="#11252c"/>
-<path d="M64 56h20v20H64zM91 56h20v20H91z" fill="none" stroke="#7ce0be" stroke-width="3"/>
-<path d="M79 66h16" stroke="#7ce0be" stroke-width="3"/>
-<text x="128" y="72" fill="#b5cbc9" font-family="Segoe UI,Arial,sans-serif" font-size="17">AGENT ENGINEERING · GO + LUA</text>
-<text x="60" y="151" fill="#f5fbf9" font-family="Segoe UI,Arial,sans-serif" font-size="66" font-weight="700" letter-spacing="-2">GoRelay</text>
-<text x="64" y="205" fill="#f5fbf9" font-family="Segoe UI,Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="28" font-weight="600">让 Agent 构建工具，让代码持续执行。</text>
-<text x="64" y="245" fill="#b5cbc9" font-family="Segoe UI,Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="18">动态能力构建 · 执行反馈纠错 · 知识检索</text>
-<path d="M64 283h645" stroke="#355058"/>
-<text x="64" y="307" fill="#91b3b4" font-family="Segoe UI,Arial,sans-serif" font-size="13">AGENT LOOP</text>
-<text x="213" y="307" fill="#91b3b4" font-family="Segoe UI,Arial,sans-serif" font-size="13">CODE AS ACTION</text>
-<text x="396" y="307" fill="#91b3b4" font-family="Segoe UI,Arial,sans-serif" font-size="13">TOOL CALLING</text>
-<text x="555" y="307" fill="#91b3b4" font-family="Segoe UI,Arial,sans-serif" font-size="13">RAG</text>
-<path d="M790 46v238" stroke="#355058"/>
-<g font-family="Segoe UI,Microsoft YaHei,Noto Sans CJK SC,sans-serif">
-<rect x="845" y="52" width="289" height="58" rx="8" fill="#1d3740"/>
-<circle cx="873" cy="81" r="5" fill="#7ce0be"/>
-<text x="891" y="88" fill="#e9f4ef" font-size="19" font-weight="600">任务目标</text><text x="1075" y="87" fill="#a4bfbe" font-size="13">PLAN</text>
-<path d="M989 116v17m-4-4 4 4 4-4" fill="none" stroke="#668c8e" stroke-width="2"/>
-<rect x="845" y="140" width="289" height="58" rx="8" fill="#7ce0be"/>
-<circle cx="873" cy="169" r="5" fill="#143d36"/>
-<text x="891" y="176" fill="#143d36" font-size="19" font-weight="600">可复用工具</text><text x="1081" y="175" fill="#225c4b" font-size="13">RUN</text>
-<path d="M989 204v17m-4-4 4 4 4-4" fill="none" stroke="#668c8e" stroke-width="2"/>
-<rect x="845" y="228" width="289" height="58" rx="8" fill="#1d3740"/>
-<circle cx="873" cy="257" r="5" fill="#7ce0be"/>
-<text x="891" y="264" fill="#e9f4ef" font-size="19" font-weight="600">数据与知识</text><text x="1061" y="263" fill="#a4bfbe" font-size="13">RECALL</text>
-</g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-labelledby="title desc">
+  <title id="title">GoRelay — 面向 AI Agent 的 MCP 数据连接器服务</title>
+  <desc id="desc">用 Go、Lua 独立进程沙箱、MySQL 与 Redis Streams 实现的自托管 MCP 数据连接器。</desc>
+  <defs>
+    <linearGradient id="heroBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f1d24"/>
+      <stop offset="100%" stop-color="#162c36"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="340" rx="14" fill="url(#heroBg)"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="338.5" rx="13.25" fill="none" stroke="#26404c" stroke-width="1.5"/>
+
+  <!-- Left Column: Crisp Identity -->
+  <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
+    <path d="M64 56h18v18H64zM88 56h18v18H88z" fill="none" stroke="#5eead4" stroke-width="2.5"/>
+    <path d="M77 65h16" stroke="#5eead4" stroke-width="2.5"/>
+    <text x="122" y="70" fill="#94a3b8" font-size="13.5" font-weight="600" letter-spacing="1" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">SELF-HOSTED MCP SERVER</text>
+
+    <text x="61" y="148" fill="#f8fafc" font-size="64" font-weight="700" letter-spacing="-2">GoRelay</text>
+
+    <text x="64" y="198" fill="#e2e8f0" font-size="22" font-weight="600">自托管的 MCP 外部数据连接器服务</text>
+    <text x="64" y="232" fill="#94a3b8" font-size="15.5">版本化规则沉淀 · 独立进程 Lua 沙箱 · 服务端视图聚合</text>
+
+    <path d="M64 266h472" stroke="#233b46"/>
+    <text x="64" y="294" fill="#cbd5e1" font-size="13" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">Go 1.26  ·  MCP HTTP  ·  gopher-lua  ·  MySQL  ·  Redis</text>
+  </g>
+
+  <!-- Right Column: Real MCP Call / Response Snapshot -->
+  <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
+    <rect x="614" y="34" width="530" height="272" rx="10" fill="#091318" stroke="#243f4b" stroke-width="1.2"/>
+    <path d="M614 68h530" stroke="#182d36"/>
+
+    <text x="634" y="55" fill="#94a3b8" font-size="12" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">POST /mcp  →  tools/call  gorelay_run_connector</text>
+    <rect x="1032" y="42" width="96" height="20" rx="4" fill="#12312e" stroke="#1f534c"/>
+    <text x="1080" y="56" text-anchor="middle" fill="#5eead4" font-size="11.5" font-weight="600" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">cache_hit</text>
+
+    <!-- Request Summary -->
+    <text x="634" y="96" fill="#64748b" font-size="12" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">args</text>
+    <text x="682" y="96" fill="#cbd5e1" font-size="12.5" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">source_id="etcd_releases"  queries=[by_series, v374_urls]</text>
+
+    <!-- Structured Output Block -->
+    <rect x="634" y="112" width="490" height="132" rx="7" fill="#0e1c24" stroke="#1d3540"/>
+    <text x="652" y="138" fill="#94a3b8" font-size="12.5" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">views.by_series</text>
+    <text x="786" y="138" fill="#f1f5f9" font-size="12.5" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">{"v3.7": 4, "v3.6": 3, "v3.5": 3}</text>
+
+    <path d="M652 152h454" stroke="#172c36"/>
+    <text x="652" y="174" fill="#94a3b8" font-size="12.5" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">views.v374_urls</text>
+    <text x="786" y="174" fill="#7dd3fc" font-size="12.5" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">.../CHANGELOG/CHANGELOG-3.7.md</text>
+
+    <path d="M652 188h454" stroke="#172c36"/>
+    <text x="652" y="210" fill="#94a3b8" font-size="12.5" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">snapshot_refs[0]</text>
+    <text x="786" y="210" fill="#94a3b8" font-size="12.5" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">"8c3317c2...477f"  (gzip archived)</text>
+
+    <text x="652" y="232" fill="#64748b" font-size="11.5" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">upstream_http: 0   ·   truncated_to_budget: false</text>
+
+    <!-- Bottom Payload Contrast -->
+    <text x="634" y="280" fill="#94a3b8" font-size="12.5">上游原始分页响应 172 KB</text>
+    <path d="M784 276h34m-5-4 5 4-5 4" fill="none" stroke="#5eead4" stroke-width="1.6"/>
+    <text x="828" y="280" fill="#5eead4" font-size="12.5" font-weight="600">实际返回上下文 2.1 KB</text>
+  </g>
+</svg>

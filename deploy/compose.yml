@@ -7,15 +7,16 @@ x-logging: &bounded-logging
 x-backend-environment: &backend-environment
   GIN_MODE: release
   GOMEMLIMIT: 256MiB
-  LUA_SPIDER_APP_PORT: 8080
-  LUA_SPIDER_APP_PPROF_PORT: 0
-  LUA_SPIDER_APP_PROXY: ""
-  LUA_SPIDER_MYSQL_DSN: gorelay:${MYSQL_PASSWORD:?set MYSQL_PASSWORD}@tcp(mysql:3306)/gorelay?charset=utf8mb4&parseTime=True&loc=UTC
-  LUA_SPIDER_REDIS_ADDR: redis:6379
-  LUA_SPIDER_REDIS_STREAM: gorelay-tasks
-  LUA_SPIDER_REDIS_CONSUMER_GROUP: gorelay-workers
-  LUA_SPIDER_ENGINE_WORKER_COUNT: ${WORKERS:-2}
-  LUA_SPIDER_ENGINE_LUA_TIMEOUT: 35
+  GORELAY_APP_PORT: 8080
+  GORELAY_APP_PPROF_PORT: 0
+  GORELAY_APP_PROXY: ""
+  GORELAY_MYSQL_DSN: gorelay:${MYSQL_PASSWORD:?set MYSQL_PASSWORD}@tcp(mysql:3306)/gorelay?charset=utf8mb4&parseTime=True&loc=UTC
+  GORELAY_REDIS_ADDR: redis:6379
+  GORELAY_REDIS_STREAM: gorelay:tasks
+  GORELAY_REDIS_CONSUMER_GROUP: gorelay-workers
+  GORELAY_PUBLISHER_POLL_INTERVAL_MS: ${GORELAY_PUBLISHER_POLL_INTERVAL_MS:-100}
+  GORELAY_ENGINE_WORKER_COUNT: ${WORKERS:-8}
+  GORELAY_ENGINE_LUA_TIMEOUT: 45
 
 x-app: &app
   image: gorelay:${GORELAY_IMAGE_TAG:-local}
@@ -26,55 +27,24 @@ x-app: &app
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
   restart: unless-stopped
-  volumes:
-    - type: bind
-      source: ${GORELAY_SPEND_POLICY_FILE:-../configs/agentbench/spend-policy.example.json}
-      target: /app/configs/spend-policy.json
-      read_only: true
-      bind: {create_host_path: false}
   environment: &environment
     <<: *backend-environment
-    GIN_MODE: release
-    GOMEMLIMIT: 256MiB
-    LUA_SPIDER_APP_PORT: 8080
-    LUA_SPIDER_APP_PPROF_PORT: 0
-    LUA_SPIDER_APP_PROXY: ""
-    LUA_SPIDER_MYSQL_DSN: gorelay:${MYSQL_PASSWORD:?set MYSQL_PASSWORD}@tcp(mysql:3306)/gorelay?charset=utf8mb4&parseTime=True&loc=UTC
-    LUA_SPIDER_REDIS_ADDR: redis:6379
-    LUA_SPIDER_REDIS_STREAM: gorelay-tasks
-    LUA_SPIDER_REDIS_CONSUMER_GROUP: gorelay-workers
-    LUA_SPIDER_ENGINE_WORKER_COUNT: ${WORKERS:-2}
-    LUA_SPIDER_ENGINE_LUA_TIMEOUT: 35
     GORELAY_ADMIN_TOKEN: ${GORELAY_ADMIN_TOKEN:?set GORELAY_ADMIN_TOKEN}
-    GORELAY_DEMO_DAILY_RUNS: ${GORELAY_DEMO_DAILY_RUNS:-20}
-    GORELAY_SPEND_POLICY_PATH: ${GORELAY_SPEND_POLICY_PATH:-}
-    GORELAY_RUN_MODEL_CALLS: ${GORELAY_RUN_MODEL_CALLS:-12}
-    GORELAY_RUN_SEARCH_CALLS: ${GORELAY_RUN_SEARCH_CALLS:-3}
-    GORELAY_RUN_STAGNATION_CALLS: ${GORELAY_RUN_STAGNATION_CALLS:-6}
-    GORELAY_RUN_TIMEOUT: ${GORELAY_RUN_TIMEOUT:-15m}
-    GORELAY_AGENT_CONCURRENCY: ${GORELAY_AGENT_CONCURRENCY:-2}
-    GORELAY_ACQUISITION_PROXY: ${GORELAY_ACQUISITION_PROXY:-}
-    GORELAY_ACTION_MODE: ${GORELAY_ACTION_MODE:-code}
-    GORELAY_DISABLE_CAPABILITY_REUSE: ${GORELAY_DISABLE_CAPABILITY_REUSE:-false}
-    GORELAY_DISABLE_KNOWLEDGE_REUSE: ${GORELAY_DISABLE_KNOWLEDGE_REUSE:-false}
-    GORELAY_INDEX_FORCE_REBUILD: ${GORELAY_INDEX_FORCE_REBUILD:-false}
     GORELAY_RUNNER_URL: http://lua-runner:8091
     GORELAY_RUNNER_TOKEN: ${GORELAY_RUNNER_TOKEN:?set GORELAY_RUNNER_TOKEN}
-    GORELAY_AI_BASE_URL: ${GORELAY_AI_BASE_URL:-}
-    GORELAY_AI_MODEL: ${GORELAY_AI_MODEL:-}
-    GORELAY_AI_API_KEY: ${GORELAY_AI_API_KEY:-}
-    GORELAY_EMBED_BASE_URL: ${GORELAY_EMBED_BASE_URL:-}
-    GORELAY_EMBED_MODEL: ${GORELAY_EMBED_MODEL:-}
-    GORELAY_EMBED_API_KEY: ${GORELAY_EMBED_API_KEY:-}
-    GORELAY_EMBED_DIMENSIONS: ${GORELAY_EMBED_DIMENSIONS:-}
-    GORELAY_SEARCH_API_KEY: ${GORELAY_SEARCH_API_KEY:-}
-    GORELAY_SEARCH_ENDPOINT: ${GORELAY_SEARCH_ENDPOINT:-https://api.search.brave.com/res/v1/web/search}
-    GORELAY_QDRANT_URL: http://qdrant:6333
-    GORELAY_QDRANT_COLLECTION: ${GORELAY_QDRANT_COLLECTION:-gorelay}
+    GORELAY_RESPECT_ROBOTS: ${GORELAY_RESPECT_ROBOTS:-true}
+    GORELAY_ACQUISITION_PROXY: ${GORELAY_ACQUISITION_PROXY:-}
+    GORELAY_AUTH_PROFILES_JSON: ${GORELAY_AUTH_PROFILES_JSON:-}
+    GORELAY_BROWSER_CDP_URL: ${GORELAY_BROWSER_CDP_URL:-}
+    GORELAY_BROWSER_CDP_TOKEN: ${GORELAY_BROWSER_CDP_TOKEN:-}
+    GORELAY_SNAPSHOT_DIR: /app/data/snapshots
+    GORELAY_CANARY_ENABLED: ${GORELAY_CANARY_ENABLED:-false}
+  volumes:
+    - snapshot-data:/app/data/snapshots
   depends_on:
     mysql: {condition: service_healthy}
     redis: {condition: service_healthy}
-  mem_limit: 384m
+  mem_limit: 256m
   pids_limit: 128
 
 services:
@@ -93,7 +63,8 @@ services:
       timeout: 3s
       retries: 30
     restart: unless-stopped
-    mem_limit: 1g
+    mem_limit: 768m
+
   redis:
     image: redis:7.4-alpine
     logging: *bounded-logging
@@ -105,84 +76,65 @@ services:
       timeout: 3s
       retries: 20
     restart: unless-stopped
-    mem_limit: 256m
-  qdrant:
-    image: qdrant/qdrant:v1.19.0
-    healthcheck:
-      test: [CMD-SHELL, 'bash -ec ''exec 3<>/dev/tcp/127.0.0.1/6333; printf "GET /readyz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; IFS= read -r status <&3; [[ "$$status" == *" 200 "* ]]''']
-      interval: 10s
-      timeout: 3s
-      retries: 10
-    logging: *bounded-logging
-    volumes: [qdrant-data:/qdrant/storage]
-    restart: unless-stopped
-    mem_limit: 512m
-  app:
-    <<: *app
-    healthcheck:
-      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/healthz]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-  publisher:
+    mem_limit: 192m
 
-    # Ordinary task publication has no Agent scheduler.
-    <<: *app
-    command: [/app/publisher]
-    environment: *backend-environment
-    depends_on:
-      app: {condition: service_healthy}
-      redis: {condition: service_healthy}
-  worker:
-    <<: *app
-    command: [/app/worker]
-    environment:
-      <<: *backend-environment
-      GORELAY_RUNNER_URL: http://lua-runner:8091
-      GORELAY_RUNNER_TOKEN: ${GORELAY_RUNNER_TOKEN:?set GORELAY_RUNNER_TOKEN}
-      GORELAY_EMBED_BASE_URL: ${GORELAY_EMBED_BASE_URL:-}
-      GORELAY_EMBED_MODEL: ${GORELAY_EMBED_MODEL:-}
-      GORELAY_EMBED_DIMENSIONS: ${GORELAY_EMBED_DIMENSIONS:-}
-      GORELAY_CHUNK_RUNES: ${GORELAY_CHUNK_RUNES:-600}
-      GORELAY_CHUNK_OVERLAP: ${GORELAY_CHUNK_OVERLAP:-80}
-    volumes: []
-    depends_on:
-      app: {condition: service_healthy}
-      lua-runner: {condition: service_healthy}
-  agent-worker:
-    <<: *app
-    command: [/app/agent-worker]
-    depends_on:
-      app: {condition: service_healthy}
-      lua-runner: {condition: service_healthy}
-  indexer:
-    <<: *app
-    command: [/app/indexer]
-    profiles: [indexing]
-    restart: "on-failure:3"
-    depends_on:
-      app: {condition: service_healthy}
-      qdrant: {condition: service_healthy}
   lua-runner:
     image: gorelay-runner:${GORELAY_IMAGE_TAG:-local}
     logging: *bounded-logging
     build: {context: .., dockerfile: Dockerfile.runner}
     environment:
       GORELAY_RUNNER_TOKEN: ${GORELAY_RUNNER_TOKEN:?set GORELAY_RUNNER_TOKEN}
+      GORELAY_RESPECT_ROBOTS: ${GORELAY_RESPECT_ROBOTS:-true}
       GORELAY_ACQUISITION_PROXY: ${GORELAY_ACQUISITION_PROXY:-}
+      GORELAY_AUTH_PROFILES_JSON: ${GORELAY_AUTH_PROFILES_JSON:-}
+      GORELAY_BROWSER_CDP_URL: ${GORELAY_BROWSER_CDP_URL:-}
+      GORELAY_BROWSER_CDP_TOKEN: ${GORELAY_BROWSER_CDP_TOKEN:-}
       GOMEMLIMIT: 96MiB
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    pids_limit: 32
-    mem_limit: 192m
-    cpus: 1.0
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 2.0
     restart: unless-stopped
     healthcheck:
       test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8091/healthz]
       interval: 5s
       timeout: 3s
       retries: 20
+
+  app:
+    <<: *app
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      lua-runner: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/healthz]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  publisher:
+    <<: *app
+    command: [/app/publisher]
+    environment: *backend-environment
+    volumes: []
+    depends_on:
+      app: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  worker:
+    <<: *app
+    command: [/app/worker]
+    environment:
+      <<: *environment
+      GORELAY_CHECKPOINT_LISTEN: :8092
+      GORELAY_CHECKPOINT_BASE_URL: http://worker:8092
+    depends_on:
+      app: {condition: service_healthy}
+      lua-runner: {condition: service_healthy}
+
   edge:
     image: caddy:2.10.2-alpine
     logging: *bounded-logging
@@ -203,6 +155,6 @@ services:
 volumes:
   mysql-data:
   redis-data:
-  qdrant-data:
+  snapshot-data:
   caddy-data:
   caddy-config:

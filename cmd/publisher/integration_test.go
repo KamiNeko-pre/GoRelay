@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	taskmodel "go-lua-crawler/internal/task"
+	taskmodel "gorelay/internal/task"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -44,7 +44,7 @@ func TestPublisherCommandIntegration(t *testing.T) {
 	defer client.Close()
 	defer client.Del(context.Background(), stream)
 	now := time.Now()
-	task := taskmodel.CrawlTask{RequestKey: stream, Target: "test", URL: "https://example.com", Status: taskmodel.StatusQueued, QueuedAt: &now}
+	task := taskmodel.CrawlTask{RequestKey: stream, SourceID: "test", URL: "https://example.com", Status: taskmodel.StatusQueued, QueuedAt: &now}
 	if err := db.Create(&task).Error; err != nil {
 		t.Fatal(err)
 	}

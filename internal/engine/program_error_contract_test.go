@@ -11,7 +11,7 @@ func TestCollectionPreservesDocumentedProgramFailure(t *testing.T) {
 		L := lua.NewState()
 		row := L.NewTable()
 		row.RawSetString("error", lua.LString(message))
-		_, err := decodeCollection(row)
+		_, err := decodeCollection(row, false)
 		L.Close()
 		if err == nil || !strings.Contains(err.Error(), message) {
 			t.Fatalf("program error replaced by shape error: %v", err)
@@ -25,10 +25,10 @@ func TestCollectionPreservesDocumentedProgramFailure(t *testing.T) {
 	item.RawSetString("error", lua.LString("a legitimate row field"))
 	items.Append(item)
 	result.RawSetString("items", items)
-	if _, err := decodeCollection(result); err != nil {
+	if _, err := decodeCollection(result, false); err != nil {
 		t.Fatal("row-level data confused with top-level failure", err)
 	}
-	if _, err := decodeCollection(L.NewTable()); err == nil {
+	if _, err := decodeCollection(L.NewTable(), false); err == nil {
 		t.Fatal("malformed result accepted")
 	}
 }

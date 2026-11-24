@@ -1,1 +1,44 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="640" height="940" viewBox="0 0 640 940" role="img" aria-labelledby="title"><title id="title">GoRelay 的 Agent、执行与知识三层架构</title><rect x="1" y="1" width="638" height="938" rx="12" fill="#f6f9fa" stroke="#dce5e7"/><g font-family="Segoe UI,Microsoft YaHei,Noto Sans CJK SC,sans-serif"><text x="28" y="40" font-size="25" font-weight="600" fill="#445e65">从能力构建，走向持续交付</text><rect x="24" y="70" width="592" height="234" rx="10" fill="#fff" stroke="#ccdadd"/><text x="48" y="107" fill="#176b65" font-size="22" font-weight="600">AGENT</text><text x="48" y="152" fill="#19343d" font-size="34" font-weight="700">规划与工具构建</text><text x="48" y="196" fill="#405b63" font-size="26">目标理解 → 观察 → 行动 → 检查</text><text x="48" y="234" fill="#405b63" font-size="26">Lua 生成、验证与工具注册</text><text x="48" y="272" fill="#405b63" font-size="26">执行反馈纠错 · 停滞检测</text><path d="M320 314v24m-6-6 6 6 6-6" stroke="#7f969c" stroke-width="2" fill="none"/><rect x="24" y="350" width="592" height="234" rx="10" fill="#fff" stroke="#ccdadd"/><text x="48" y="387" fill="#2c5f9c" font-size="22" font-weight="600">EXECUTION</text><text x="48" y="432" fill="#19343d" font-size="34" font-weight="700">可靠调度与执行</text><text x="48" y="476" fill="#405b63" font-size="26">API / Lua / 按需授权 Browser</text><text x="48" y="514" fill="#405b63" font-size="26">Outbox → Redis Streams → Worker</text><text x="48" y="552" fill="#405b63" font-size="26">隔离 Runner · 租约与故障接管</text><path d="M320 594v24m-6-6 6 6 6-6" stroke="#7f969c" stroke-width="2" fill="none"/><rect x="24" y="630" width="592" height="234" rx="10" fill="#fff" stroke="#ccdadd"/><text x="48" y="667" fill="#8a5a24" font-size="22" font-weight="600">KNOWLEDGE</text><text x="48" y="712" fill="#19343d" font-size="34" font-weight="700">数据沉淀与检索</text><text x="48" y="756" fill="#405b63" font-size="26">结构化记录 · 来源与版本</text><text x="48" y="794" fill="#405b63" font-size="26">独立索引 · BM25 / 向量 / RRF</text><text x="48" y="832" fill="#405b63" font-size="26">证据检索 · 原文引用与追溯</text><text x="320" y="909" text-anchor="middle" font-size="24" fill="#526b72">执行反馈回到 Agent，按需修复</text></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="820" viewBox="0 0 640 820" role="img" aria-labelledby="title">
+  <title id="title">GoRelay 进程与数据流拓扑（移动端）</title>
+  <rect x="0.75" y="0.75" width="638.5" height="818.5" rx="12" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
+    <text x="28" y="38" fill="#0f172a" font-size="19" font-weight="700">运行拓扑与进程边界</text>
+
+    <rect x="24" y="58" width="592" height="106" rx="8" fill="#ffffff" stroke="#0f766e" stroke-width="1.6"/>
+    <text x="44" y="88" fill="#0f766e" font-size="13" font-weight="700" font-family="ui-monospace,Consolas,monospace">MCP Client ↔ app :8080</text>
+    <text x="44" y="116" fill="#0f172a" font-size="18" font-weight="700">固定 6 工具入口 · 缓存直读 · 多视图查询</text>
+    <text x="44" y="144" fill="#475569" font-size="14.5">连接器版本表与缓存命中直接返回，不触发外网请求</text>
+
+    <path d="M320 168v22m-5-5 5 5 5-5" fill="none" stroke="#64748b" stroke-width="1.8"/>
+
+    <rect x="24" y="196" width="592" height="106" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="44" y="226" fill="#475569" font-size="13" font-weight="700" font-family="ui-monospace,Consolas,monospace">MySQL Outbox → publisher → Redis Streams</text>
+    <text x="44" y="254" fill="#0f172a" font-size="18" font-weight="700">事务投递与异步队列</text>
+    <text x="44" y="282" fill="#475569" font-size="14.5">100ms 轮询补投 · 消费组与超时消息接管</text>
+
+    <path d="M320 306v22m-5-5 5 5 5-5" fill="none" stroke="#64748b" stroke-width="1.8"/>
+
+    <rect x="24" y="334" width="592" height="122" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="44" y="364" fill="#475569" font-size="13" font-weight="700" font-family="ui-monospace,Consolas,monospace">worker + lua-runner (-child)</text>
+    <text x="44" y="392" fill="#0f172a" font-size="18" font-weight="700">可靠执行与进程隔离沙箱</text>
+    <text x="44" y="420" fill="#475569" font-size="14.5">租约续期 · XAUTOCLAIM · CAS 页级断点续跑</text>
+    <text x="44" y="444" fill="#64748b" font-size="14">http_api 执行器 | 只读 FS 无密钥子进程 Lua</text>
+
+    <path d="M320 460v22m-5-5 5 5 5-5" fill="none" stroke="#64748b" stroke-width="1.8"/>
+
+    <rect x="24" y="488" width="592" height="112" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.4"/>
+    <text x="44" y="518" fill="#0f766e" font-size="13" font-weight="700" font-family="ui-monospace,Consolas,monospace">SafeClient → 外部目标源</text>
+    <text x="44" y="546" fill="#0f172a" font-size="18" font-weight="700">统一出网代理与安全边界</text>
+    <text x="44" y="574" fill="#334155" font-size="14.5">SSRF 阻断 · robots.txt · 单域名限速 · 429 熔断 · 5 MiB 上限</text>
+
+    <path d="M320 604v22m-5-5 5 5 5-5" fill="none" stroke="#64748b" stroke-width="1.8"/>
+
+    <rect x="24" y="632" width="592" height="160" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="44" y="662" fill="#475569" font-size="13" font-weight="700" font-family="ui-monospace,Consolas,monospace">Pipeline → MySQL 8.4 + Disk Snapshots</text>
+    <text x="44" y="690" fill="#0f172a" font-size="18" font-weight="700">漂移回滚、清洗去重与原文归档</text>
+    <text x="44" y="720" fill="#475569" font-size="14.5">伪 200 / 缺字段自动回滚，不覆盖旧数据</text>
+    <text x="44" y="748" fill="#475569" font-size="14.5">脚本标签净化 · 实体哈希去重 · SHA-256 Gzip + BM25</text>
+    <text x="44" y="774" fill="#64748b" font-size="13.5">大结果集通过鉴权 HTTP 导出 CSV / JSON / Markdown</text>
+  </g>
+</svg>

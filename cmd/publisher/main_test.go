@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"go-lua-crawler/internal/config"
+	"gorelay/internal/config"
 	"go.uber.org/zap"
 )
 

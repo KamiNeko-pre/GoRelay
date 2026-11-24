@@ -2,17 +2,22 @@ package task
 
 import "time"
 
-// CrawlTask records one accepted collection request. MySQL stores this record as
-// the source of truth while Redis Streams will later transport only its ID.
+// CrawlTask records one accepted connector execution job. MySQL is the source
+// of truth while Redis Streams transports only the task ID.
 type CrawlTask struct {
 	ID                uint64     `json:"id" gorm:"primaryKey;autoIncrement"`
 	RequestKey        string     `json:"request_key" gorm:"type:varchar(128);not null;uniqueIndex"`
-	Target            string     `json:"target" gorm:"type:varchar(64);not null"`
 	URL               string     `json:"url" gorm:"type:text;not null"`
-	ProgramHash       string     `json:"program_hash,omitempty" gorm:"size:64"`
-	RuleHash          string     `json:"rule_hash,omitempty" gorm:"size:64"`
-	ProgramParams     string     `json:"-" gorm:"type:longtext"`
-	RunID             string     `json:"run_id,omitempty" gorm:"size:32;index"`
+	SourceID          string     `json:"source_id,omitempty" gorm:"size:64;index"`
+	ConnectorVersion  int        `json:"connector_version,omitempty"`
+	Executor          string     `json:"executor,omitempty" gorm:"size:32"`
+	ActiveDedupKey    string     `json:"active_dedup_key,omitempty" gorm:"size:128;index"`
+	ParamsJSON        string     `json:"params_json,omitempty" gorm:"type:longtext"`
+	CheckpointJSON    string     `json:"checkpoint_json,omitempty" gorm:"type:longtext"`
+	HitType           string     `json:"hit_type,omitempty" gorm:"size:32"`
+	RecordsSaved      int        `json:"records_saved" gorm:"not null;default:0"`
+	LatencyMS         int64      `json:"latency_ms" gorm:"not null;default:0"`
+	Cancelled         bool       `json:"cancelled" gorm:"not null;default:false"`
 	ExecutionDeadline *time.Time `json:"execution_deadline,omitempty"`
 	Status            Status     `json:"status" gorm:"type:varchar(20);not null;index"`
 	RetryCount        int        `json:"retry_count" gorm:"not null;default:0"`

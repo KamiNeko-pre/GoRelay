@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"go-lua-crawler/internal/config"
+	"gorelay/internal/config"
 )
 
 func TestPublishTask(t *testing.T) {

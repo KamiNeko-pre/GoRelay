@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"go-lua-crawler/internal/config"
+	"gorelay/internal/config"
 
 	"github.com/redis/go-redis/v9"
 )

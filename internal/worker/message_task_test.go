@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"go-lua-crawler/internal/repository"
-	taskmodel "go-lua-crawler/internal/task"
+	"gorelay/internal/repository"
+	taskmodel "gorelay/internal/task"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -64,7 +64,7 @@ func TestLoadCrawlTaskFromMessageIntegration(t *testing.T) {
 	previous := repository.DB
 	repository.DB = db
 	t.Cleanup(func() { repository.DB = previous })
-	task := taskmodel.CrawlTask{RequestKey: fmt.Sprintf("message-task-test-%d", time.Now().UnixNano()), Target: "test", URL: "https://example.com/item", Status: taskmodel.StatusQueued}
+	task := taskmodel.CrawlTask{RequestKey: fmt.Sprintf("message-task-test-%d", time.Now().UnixNano()), SourceID: "test", URL: "https://example.com/item", Status: taskmodel.StatusQueued}
 	if err := db.Create(&task).Error; err != nil {
 		t.Fatal(err)
 	}

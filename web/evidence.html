@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Snapshot Evidence · GoRelay v2</title>
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0b101b; color: #e6edf7; }
+    header { padding: 16px 24px; border-bottom: 1px solid #232d42; display: flex; gap: 16px; align-items: center; }
+    a { color: #38bdf8; text-decoration: none; }
+    main { max-width: 900px; margin: 24px auto; padding: 0 24px; }
+    .card { background: #121926; border: 1px solid #232d42; border-radius: 10px; padding: 20px; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #0b101b; padding: 14px; border-radius: 8px; border: 1px solid #1e293b; font-size: 13px; }
+    .meta { color: #93a1b9; font-size: 13px; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <header><a href="/">GoRelay v2</a><span>Archived Evidence Snapshot</span></header>
+  <main>
+    <div class="card">
+      <div class="meta" id="meta">Loading snapshot...</div>
+      <h2 id="title" style="margin-top:0"></h2>
+      <pre id="snippet"></pre>
+    </div>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const ref = params.get('ref') || '';
+    const tok = sessionStorage.getItem('gorelay_token') || '';
+    const hdr = tok ? { Authorization: 'Bearer ' + tok } : {};
+    if (!ref) {
+      document.getElementById('meta').textContent = 'Missing ?ref=<snapshot_ref> query parameter.';
+    } else {
+      fetch('/api/v1/evidence?ref=' + encodeURIComponent(ref), { headers: hdr })
+        .then(r => r.json())
+        .then(data => {
+          const hit = (data.entries || [])[0];
+          if (!hit) {
+            document.getElementById('meta').textContent = data.error || 'Snapshot not found.';
+            return;
+          }
+          document.getElementById('title').textContent = hit.title || hit.source_url;
+          document.getElementById('meta').textContent = 'Source: ' + hit.source_id + ' · Ref: ' + hit.snapshot_ref + ' · Fetched: ' + hit.fetched_at;
+          document.getElementById('snippet').textContent = hit.snippet;
+        })
+        .catch(err => { document.getElementById('meta').textContent = 'Error: ' + err.message; });
+    }
+  </script>
+</body>
+</html>

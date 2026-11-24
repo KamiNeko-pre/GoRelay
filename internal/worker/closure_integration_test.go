@@ -12,11 +12,17 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"go-lua-crawler/internal/repository"
-	taskmodel "go-lua-crawler/internal/task"
+	"gorelay/internal/repository"
+	taskmodel "gorelay/internal/task"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
+
+type closureTestResult struct {
+	TaskID    uint64    `gorm:"primaryKey;autoIncrement:false"`
+	Payload   string    `gorm:"type:json;not null"`
+	CreatedAt time.Time
+}
 
 func TestRedisClosureIntegration(t *testing.T) {
 	dsn, addr := os.Getenv("CLOSURE_TEST_MYSQL_DSN"), os.Getenv("CLOSURE_TEST_REDIS_ADDR")
@@ -32,7 +38,7 @@ func TestRedisClosureIntegration(t *testing.T) {
 	previous := repository.DB
 	repository.DB = db
 	defer func() { repository.DB = previous }()
-	if err := db.AutoMigrate(&taskmodel.CrawlTask{}, &repository.CrawlResult{}, &taskmodel.TaskEvent{}); err != nil {
+	if err := db.AutoMigrate(&taskmodel.CrawlTask{}, &closureTestResult{}, &taskmodel.TaskEvent{}); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -49,13 +55,13 @@ func TestRedisClosureIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		task := taskmodel.CrawlTask{RequestKey: key, Target: "test", URL: "https://example.com", Status: taskmodel.StatusQueued}
+		task := taskmodel.CrawlTask{RequestKey: key, SourceID: "test", URL: "https://example.com", Status: taskmodel.StatusQueued}
 		if err := db.Create(&task).Error; err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
 			client.Del(ctx, key)
-			db.Delete(&repository.CrawlResult{}, "task_id = ?", task.ID)
+			db.Delete(&closureTestResult{}, "task_id = ?", task.ID)
 			db.Delete(&task)
 		})
 		if err := client.XGroupCreateMkStream(ctx, key, "group", "0").Err(); err != nil {
@@ -72,7 +78,7 @@ func TestRedisClosureIntegration(t *testing.T) {
 	}
 	save := func(task taskmodel.CrawlTask) repository.PersistTaskResult {
 		return func(tx *gorm.DB) error {
-			return tx.Create(&repository.CrawlResult{TaskID: task.ID, Payload: `{"ok":true}`}).Error
+			return tx.Create(&closureTestResult{TaskID: task.ID, Payload: `{"ok":true}`}).Error
 		}
 	}
 	assertResult := func(t *testing.T, p *Processor, task taskmodel.CrawlTask, want taskmodel.Status, count int64, pending int64) {
@@ -82,7 +88,7 @@ func TestRedisClosureIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		var n int64
-		db.Model(&repository.CrawlResult{}).Where("task_id = ?", task.ID).Count(&n)
+		db.Model(&closureTestResult{}).Where("task_id = ?", task.ID).Count(&n)
 		pel, err := client.XPending(ctx, p.config.Stream, p.config.Group).Result()
 		if err != nil {
 			t.Fatal(err)
@@ -135,13 +141,13 @@ func TestRedisClosureIntegration(t *testing.T) {
 		go func() { done <- r.Run(runCtx) }()
 		for runCtx.Err() == nil {
 			var n int64
-			db.Model(&repository.CrawlResult{}).Where("task_id = ?", task.ID).Count(&n)
-			if n == 1 {
+			db.Model(&closureTestResult{}).Where("task_id = ?", task.ID).Count(&n)
+			pel, pelErr := client.XPending(ctx, p.config.Stream, p.config.Group).Result()
+			if n == 1 && pelErr == nil && pel.Count == 0 {
 				break
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		time.Sleep(30 * time.Millisecond)
 		cancel()
 		<-done
 		assertResult(t, p, task, taskmodel.StatusSucceeded, 1, 0)

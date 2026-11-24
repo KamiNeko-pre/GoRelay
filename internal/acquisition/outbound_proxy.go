@@ -49,8 +49,11 @@ func (f *PublicFetcher) dialPublicPeer(ctx context.Context, network, verifiedAdd
 	}()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	deadline := time.Now().Add(f.policy.Timeout)
-	if end, exists := ctx.Deadline(); exists && end.Before(deadline) {
+	var deadline time.Time
+	if f.policy.Timeout > 0 {
+		deadline = time.Now().Add(f.policy.Timeout)
+	}
+	if end, exists := ctx.Deadline(); exists && (deadline.IsZero() || end.Before(deadline)) {
 		deadline = end
 	}
 	if err = conn.SetDeadline(deadline); err != nil {

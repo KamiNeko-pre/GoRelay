@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"go-lua-crawler/internal/queue"
-	"go-lua-crawler/internal/repository"
-	taskmodel "go-lua-crawler/internal/task"
+	"gorelay/internal/queue"
+	"gorelay/internal/repository"
+	taskmodel "gorelay/internal/task"
 )
 
 // PublishPendingTaskOutboxes publishes the task IDs from one bounded Outbox

@@ -65,20 +65,20 @@ var (
 )
 
 func InitConfig() {
-	viper.SetEnvPrefix("LUA_SPIDER")
+	viper.SetEnvPrefix("GORELAY")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 	bindEnvironment()
 	viper.SetDefault("redis.claim_min_idle_ms", 120000)
 	viper.SetDefault("redis.claim_interval_ms", 15000)
 	viper.SetDefault("publisher.batch_size", 100)
-	viper.SetDefault("publisher.poll_interval_ms", 1000)
+	viper.SetDefault("publisher.poll_interval_ms", 100)
 	viper.SetDefault("publisher.batch_timeout_seconds", 10)
 	// Viper 从项目根目录下的 configs/config.yaml 读取配置。
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath("./configs")
-	if path := os.Getenv("LUA_SPIDER_CONFIG"); path != "" {
+	if path := os.Getenv("GORELAY_CONFIG"); path != "" {
 		viper.SetConfigFile(path)
 	}
 	if err := viper.ReadInConfig(); err != nil {

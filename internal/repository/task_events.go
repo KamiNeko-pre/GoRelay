@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	taskmodel "go-lua-crawler/internal/task"
+	taskmodel "gorelay/internal/task"
 )
 
 // RecordTaskEvent writes one diagnostic milestone without changing task state.

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	taskmodel "go-lua-crawler/internal/task"
-	"go-lua-crawler/internal/testdb"
+	taskmodel "gorelay/internal/task"
+	"gorelay/internal/testdb"
 )
 
 func TestTransitionCrawlTaskRejectsInvalidTransitionBeforeDatabase(t *testing.T) {
@@ -38,7 +38,7 @@ func TestTransitionCrawlTaskCompareAndSet(t *testing.T) {
 	requestKey := fmt.Sprintf("integration-cas-%d", time.Now().UnixNano())
 	crawlTask := taskmodel.CrawlTask{
 		RequestKey: requestKey,
-		Target:     "integration_test",
+		SourceID:   "integration_test",
 		URL:        "https://example.com/tasks",
 		Status:     taskmodel.StatusQueued,
 	}

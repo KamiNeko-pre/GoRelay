@@ -14,8 +14,8 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "valid config",
 			config: Config{
-				Stream:        "crawler:tasks",
-				Group:         "crawler-workers",
+				Stream:        "gorelay:tasks",
+				Group:         "gorelay-workers",
 				Consumer:      "worker-1",
 				ReadBlock:     time.Second,
 				ReadCount:     1,
@@ -26,7 +26,7 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "missing stream",
 			config: Config{
-				Group:         "crawler-workers",
+				Group:         "gorelay-workers",
 				Consumer:      "worker-1",
 				ReadBlock:     time.Second,
 				ReadCount:     1,
@@ -38,7 +38,7 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "missing group",
 			config: Config{
-				Stream:        "crawler:tasks",
+				Stream:        "gorelay:tasks",
 				Consumer:      "worker-1",
 				ReadBlock:     time.Second,
 				ReadCount:     1,
@@ -50,8 +50,8 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "missing consumer",
 			config: Config{
-				Stream:        "crawler:tasks",
-				Group:         "crawler-workers",
+				Stream:        "gorelay:tasks",
+				Group:         "gorelay-workers",
 				ReadBlock:     time.Second,
 				ReadCount:     1,
 				ClaimMinIdle:  time.Minute,
@@ -62,8 +62,8 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "non-positive read count",
 			config: Config{
-				Stream:        "crawler:tasks",
-				Group:         "crawler-workers",
+				Stream:        "gorelay:tasks",
+				Group:         "gorelay-workers",
 				Consumer:      "worker-1",
 				ReadBlock:     time.Second,
 				ClaimMinIdle:  time.Minute,
