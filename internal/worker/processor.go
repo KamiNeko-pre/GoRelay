@@ -145,14 +145,14 @@ func (processor *Processor) process(ctx context.Context, message redis.XMessage,
 	if err := repository.CompleteCrawlTask(commitCtx, crawlTask.ID, status, failureCode, lastError, time.Now(), token, persist); err != nil {
 		return fmt.Errorf("complete task %d: %w", crawlTask.ID, err)
 	}
+	if err := processor.ack(ctx, message.ID); err != nil {
+		return err
+	}
 	if status == taskmodel.StatusSucceeded {
 		processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageMySQLCommitted, taskmodel.EventLevelInfo, "mysql_committed", "结果快照与任务状态已提交")
 		processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageCompleted, taskmodel.EventLevelInfo, "completed", "任务已完成")
 	} else {
 		processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageMySQLCommitted, taskmodel.EventLevelInfo, "mysql_committed", "失败状态与错误信息已提交")
-	}
-	if err := processor.ack(ctx, message.ID); err != nil {
-		return err
 	}
 	processor.recordEvent(ctx, crawlTask.ID, taskmodel.EventStageAcked, taskmodel.EventLevelInfo, "acked", "Redis 消息已确认")
 	return nil

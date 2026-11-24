@@ -253,9 +253,10 @@ func runLiveCheck(ctx context.Context, endpoint, token, targetURL, sourceID stri
 		return BenchReport{}, fmt.Errorf("target %q probed as %q (%s) without draft_api_spec; pass a public JSON API endpoint for live http_api benchmark", targetURL, probeRes.Kind, probeRes.RecommendedExecutor)
 	}
 
-	// Build a minimal valid OutputSchema from the probed DraftAPISpec fields.
-	outSchema := buildSchemaFromDraftSpec(probeRes.DraftAPISpec)
-	specBytes, err := json.Marshal(probeRes.DraftAPISpec)
+	// Build a minimal valid OutputSchema from the probed DraftAPISpec & JSONSummary scalar fields.
+	draftSpec := *probeRes.DraftAPISpec
+	outSchema := buildSchemaFromProbe(&draftSpec, probeRes.JSONSummary)
+	specBytes, err := json.Marshal(draftSpec)
 	if err != nil {
 		return BenchReport{}, err
 	}
@@ -345,22 +346,70 @@ func callToolReply(ctx context.Context, session *mcp.ClientSession, name string,
 	return len(txt.Text), nil
 }
 
-func buildSchemaFromDraftSpec(draft *probe.DraftAPISpec) map[string]any {
-	fields := make([]map[string]any, 0, len(draft.FieldMapping))
+func buildSchemaFromProbe(draft *probe.DraftAPISpec, summary *probe.JSONSummary) map[string]any {
+	typeMap := map[string]string{}
+	if summary != nil {
+		for k, v := range summary.Fields {
+			typeMap[k] = v
+		}
+	}
+	canonicalType := func(raw string) (string, bool) {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "", "string":
+			return "string", true
+		case "number", "integer":
+			return "number", true
+		case "boolean":
+			return "boolean", true
+		default:
+			return "", false
+		}
+	}
+
+	preferred := []string{"id", "tag_name", "name", "title", "html_url", "url", "published_at", "created_at"}
+	selected := make([]string, 0, 6)
+	seen := map[string]bool{}
+	for _, k := range preferred {
+		if _, exists := draft.FieldMapping[k]; exists {
+			if _, ok := canonicalType(typeMap[k]); ok {
+				selected = append(selected, k)
+				seen[k] = true
+			}
+		}
+	}
+	for k := range draft.FieldMapping {
+		if len(selected) >= 6 {
+			break
+		}
+		if seen[k] {
+			continue
+		}
+		if _, ok := canonicalType(typeMap[k]); ok {
+			selected = append(selected, k)
+			seen[k] = true
+		}
+	}
+
+	trimmedMapping := make(map[string]string, len(selected))
+	fields := make([]map[string]any, 0, len(selected))
 	var firstKey string
-	for name := range draft.FieldMapping {
-		if firstKey == "" || name == "id" || name == "url" {
+	for _, name := range selected {
+		trimmedMapping[name] = draft.FieldMapping[name]
+		ft, _ := canonicalType(typeMap[name])
+		if firstKey == "" {
 			firstKey = name
 		}
 		fields = append(fields, map[string]any{
 			"name":     name,
-			"type":     "any",
+			"type":     ft,
 			"required": name == firstKey,
 		})
 	}
-	if firstKey == "" {
+	if len(fields) == 0 {
 		firstKey = "source_url"
 		fields = append(fields, map[string]any{"name": "source_url", "type": "string", "required": true})
+	} else {
+		draft.FieldMapping = trimmedMapping
 	}
 	return map[string]any{
 		"entity_keys": []string{firstKey},

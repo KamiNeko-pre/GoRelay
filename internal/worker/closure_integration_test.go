@@ -142,12 +142,12 @@ func TestRedisClosureIntegration(t *testing.T) {
 		for runCtx.Err() == nil {
 			var n int64
 			db.Model(&closureTestResult{}).Where("task_id = ?", task.ID).Count(&n)
-			if n == 1 {
+			pel, pelErr := client.XPending(ctx, p.config.Stream, p.config.Group).Result()
+			if n == 1 && pelErr == nil && pel.Count == 0 {
 				break
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		time.Sleep(30 * time.Millisecond)
 		cancel()
 		<-done
 		assertResult(t, p, task, taskmodel.StatusSucceeded, 1, 0)

@@ -111,7 +111,20 @@ func (g *DomainGovernor) AllowAndWait(ctx context.Context, host string, crawlDel
 		}
 	}
 	if err := limiter.Wait(ctx); err != nil {
-		return err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		retrySec := int(math.Ceil(crawlDelay.Seconds()))
+		if retrySec < 1 {
+			retrySec = 1
+		}
+		return &GovernanceError{
+			Code:          ErrCodeRateLimited,
+			Message:       fmt.Sprintf("per-domain rate limit or robots Crawl-delay for %s exceeds request deadline", host),
+			Host:          host,
+			RetryAfterSec: retrySec,
+			Err:           err,
+		}
 	}
 	return nil
 }

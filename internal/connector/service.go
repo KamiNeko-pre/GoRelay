@@ -644,12 +644,17 @@ func (s *Service) BuildJobResponse(ctx context.Context, taskID uint64, cursor, b
 		Error:        t.LastError,
 	}
 	if t.Status == taskmodel.StatusSucceeded {
-		page, err := s.Pipeline.DeliverRecordsPage(ctx, t.SourceID, t.ID, cursor, pipeline.DefaultMCPResponseMaxBytes, pipeline.DefaultMCPPageSize, baseURL)
+		jobFilter := t.ID
+		if t.RecordsSaved == 0 {
+			// All rows matched prior content_hash (unchanged warm refresh/rollback):
+			// deliver the source's current active view seamlessly across pages.
+			jobFilter = 0
+		}
+		page, err := s.Pipeline.DeliverRecordsPage(ctx, t.SourceID, jobFilter, cursor, pipeline.DefaultMCPResponseMaxBytes, pipeline.DefaultMCPPageSize, baseURL)
 		if err != nil {
 			return out, err
 		}
-		if page.Returned == 0 && t.RecordsSaved > 0 {
-			// All rows skipped as exact duplicates of prior versions: return current active view.
+		if page.Returned == 0 && jobFilter != 0 && cursor == "" {
 			page, err = s.Pipeline.DeliverRecordsPage(ctx, t.SourceID, 0, cursor, pipeline.DefaultMCPResponseMaxBytes, pipeline.DefaultMCPPageSize, baseURL)
 			if err != nil {
 				return out, err

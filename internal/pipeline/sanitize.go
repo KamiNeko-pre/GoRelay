@@ -33,11 +33,21 @@ func SanitizeText(s string) string {
 	var b strings.Builder
 	b.Grow(len(cleaned))
 	for _, r := range cleaned {
+		if isHiddenInjectionRune(r) {
+			continue
+		}
 		if r == '\n' || r == '\t' || (r >= 0x20 && r != 0x7f) {
 			b.WriteRune(r)
 		}
 	}
 	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func isHiddenInjectionRune(r rune) bool {
+	return (r >= 0x200B && r <= 0x200F) ||
+		(r >= 0x202A && r <= 0x202E) ||
+		(r >= 0x2060 && r <= 0x206F) ||
+		r == 0xFEFF
 }
 
 type ProjectedRow struct {
