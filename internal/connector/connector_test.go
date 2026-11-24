@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"gorelay/internal/engine"
 	"gorelay/internal/fetchgov"
 	"gorelay/internal/pipeline"
+	"gorelay/internal/probe"
 	"gorelay/internal/repository"
 	taskmodel "gorelay/internal/task"
 	"gorelay/internal/testdb"
@@ -353,4 +355,355 @@ return true, {items = {}}
 	if err != nil || !strings.Contains(seenURL, "page=2") || len(rows2) != 1 || rows2[0]["id"] != "p2" {
 		t.Fatalf("pagination=none clobbered caller params[page]: url=%q rows=%+v err=%v", seenURL, rows2, err)
 	}
+}
+
+func TestReceiptModeQueryPushdownTargetOverrideAndProbeReuseDB(t *testing.T) {
+	db := testdb.Open(t)
+	if err := repository.AutoMigrate(db, &taskmodel.CrawlTask{}, &taskmodel.TaskOutbox{}, &taskmodel.TaskEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pipeline.Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	prevDB := repository.DB
+	repository.DB = db
+	t.Cleanup(func() { repository.DB = prevDB })
+
+	var upstreamHits atomic.Int32
+	cfg := fetchgov.DefaultConfig()
+	cfg.RespectRobots = false
+	cfg.RequestsPerSec = 100
+	cfg.Burst = 100
+	cfg.RequesterFactory = func(acquisition.Policy) (fetchgov.Requester, error) {
+		return &apiStubRequester{fn: func(_ context.Context, opts acquisition.RequestOptions) (acquisition.Response, error) {
+			upstreamHits.Add(1)
+			if strings.Contains(opts.URL, "page=999") {
+				return acquisition.Response{
+					Body:    `{"message":"Only the first 1000 results are available.","status":"422"}`,
+					Receipt: acquisition.Receipt{URL: opts.URL, Status: 422, Headers: map[string]string{"content-type": "application/json"}},
+				}, nil
+			}
+			return acquisition.Response{
+				Body: `{"items":[
+					{"tag":"v3.7.4","price":54.23,"body":"Release notes https://github.com/etcd-io/etcd/blob/main/CHANGELOG/CHANGELOG-3.7.md and ` + strings.Repeat("x", 400) + `"},
+					{"tag":"v3.7.3","price":12.00,"body":"Minor fix"},
+					{"tag":"v3.6.5","price":57.25,"body":"Older branch"},
+					{"tag":"v3.5.9","price":22.00,"body":"Legacy"}
+				]}`,
+				Receipt: acquisition.Receipt{URL: opts.URL, Status: 200, Headers: map[string]string{"content-type": "application/json"}},
+			}, nil
+		}}, nil
+	}
+	gov, err := fetchgov.NewSafeClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapDir := t.TempDir()
+	svc, err := NewService(db, gov, pipeline.NewStore(db, snapDir), ServiceConfig{SnapshotDir: snapDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.InlineExec = func(ctx context.Context, taskID uint64) error {
+		tRow, err := repository.GetCrawlTask(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		token, err := repository.ClaimCrawlTask(ctx, tRow, 30*time.Second, false)
+		if err != nil {
+			return err
+		}
+		tRow.RunToken = token
+		persist, execErr := svc.ExecuteConnectorTask(ctx, tRow)
+		st, fcode, lerr := taskmodel.StatusSucceeded, "", ""
+		if execErr != nil {
+			st, fcode, lerr = taskmodel.StatusFailed, "connector_exec", execErr.Error()
+		}
+		return repository.CompleteCrawlTask(ctx, tRow.ID, st, fcode, lerr, time.Now(), token, persist)
+	}
+
+	// 1. Probe caches response in memory for 60s; immediate DeployAndRun reuses it (total upstream hits = 1!).
+	if _, err := svc.Prober.Probe(context.Background(), probe.ProbeRequest{URL: "https://api.example.org/releases", DetectAPI: true}); err != nil {
+		t.Fatal(err)
+	}
+	if upstreamHits.Load() != 1 {
+		t.Fatalf("expected 1 hit from Probe, got %d", upstreamHits.Load())
+	}
+
+	specJSON, _ := json.Marshal(APISpec{
+		URLTemplate:  "https://api.example.org/releases",
+		Method:       http.MethodGet,
+		ItemsPath:    "/items",
+		FieldMapping: map[string]string{"tag": "/tag", "price": "/price", "body": "/body"},
+		Pagination:   "none",
+	})
+	outSchema := json.RawMessage(`{"entity_keys":["tag"],"min_rows":1,"fields":[{"name":"tag","type":"string","required":true},{"name":"price","type":"number","required":true},{"name":"body","type":"source_text"}]}`)
+
+	deployRes, err := svc.DeployAndRun(context.Background(), DeployAndRunInput{
+		SourceID:     "etcd_rel",
+		Kind:         KindData,
+		Executor:     ExecutorHTTPAPI,
+		TargetURL:    "https://api.example.org/releases",
+		SpecOrCode:   string(specJSON),
+		OutputSchema: outSchema,
+		WaitMS:       1000,
+	}, "http://localhost:8080")
+	if err != nil {
+		t.Fatalf("deploy failed: %v", err)
+	}
+	if upstreamHits.Load() != 1 {
+		t.Fatalf("expected DeployAndRun trial to reuse 60s probe cache (want 1 total HTTP hit, got %d)", upstreamHits.Load())
+	}
+	if deployRes.Data == nil || deployRes.Data.Mode != "receipt" || deployRes.Data.Total != 4 || deployRes.Data.Returned != 2 {
+		t.Fatalf("expected compact receipt (total=4, returned=2), got %+v", deployRes.Data)
+	}
+	if len(deployRes.Data.ExportURLs) != 3 {
+		t.Fatalf("expected 3 export URLs on receipt, got %+v", deployRes.Data.ExportURLs)
+	}
+
+	// 2. Cached query pushdown: filter price > 50, sort DESC, group by tag prefix, extract CHANGELOG URL (0 upstream HTTP!).
+	q, err := pipeline.ParseRecordQuery(map[string]any{
+		"where":        []map[string]any{{"field": "price", "op": "gt", "value": 50}},
+		"order_by":     "-price",
+		"fields":       []string{"tag", "price"},
+		"group_by":     "tag",
+		"group_prefix": 4,
+		"limit":        2,
+		"extract_urls": map[string]any{"field": "body", "pattern": "CHANGELOG"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	qRes, err := svc.RunConnector(context.Background(), RunConnectorInput{
+		SourceID:        "etcd_rel",
+		FreshnessTTLSec: 600,
+		Query:           q,
+	}, "http://localhost:8080")
+	if err != nil || qRes.HitType != HitCacheHit || upstreamHits.Load() != 1 {
+		t.Fatalf("expected 0-HTTP cache_hit query, got res=%+v hits=%d err=%v", qRes, upstreamHits.Load(), err)
+	}
+	if qRes.Data == nil || qRes.Data.Matched != 2 || qRes.Data.Groups["v3.7"] != 1 || qRes.Data.Records[0]["tag"] != "v3.6.5" {
+		t.Fatalf("unexpected query result: %+v", qRes.Data)
+	}
+	if len(qRes.Data.ExtractedURLs) != 1 || !strings.Contains(qRes.Data.ExtractedURLs[0], "CHANGELOG-3.7.md") {
+		t.Fatalf("expected extracted CHANGELOG URL, got %v", qRes.Data.ExtractedURLs)
+	}
+
+	// 3. target_url override on RunConnector bypasses cache, executes ?page=999 directly,
+	//    returns HTTP 422 + JSON excerpt + active_version=1 + intact_cached_rows=4 without degrading active connector.
+	overrideRes, err := svc.RunConnector(context.Background(), RunConnectorInput{
+		SourceID:  "etcd_rel",
+		TargetURL: "https://api.example.org/releases?page=999",
+		WaitMS:    1000,
+	}, "http://localhost:8080")
+	if err != nil || overrideRes.Status != "failed" || overrideRes.ActiveVersion != 1 || overrideRes.IntactCachedRows != 4 {
+		t.Fatalf("expected target_url override failure with intact cache info, got res=%+v err=%v", overrideRes, err)
+	}
+	if !strings.Contains(overrideRes.Error, "422") || !strings.Contains(overrideRes.Error, "Only the first 1000 results") {
+		t.Fatalf("expected HTTP 422 JSON excerpt in error, got %q", overrideRes.Error)
+	}
+	var connRow Connector
+	if err := db.First(&connRow, "source_id = ?", "etcd_rel").Error; err != nil || connRow.Status != StatusActive {
+		t.Fatalf("target_url override must NOT degrade active connector, got %+v err=%v", connRow, err)
+	}
+
+	// 4. Trial failure with wrong schema mapping MUST return structured Drift.SampleRow (truncated) + intact_cached_rows.
+	badSpecJSON, _ := json.Marshal(APISpec{
+		URLTemplate:  "https://api.example.org/releases",
+		Method:       http.MethodGet,
+		Headers:      map[string]string{"Accept": "application/vnd.github+json"},
+		ItemsPath:    "/items",
+		FieldMapping: map[string]string{"wrong_col": "/tag", "body": "/body"},
+		Pagination:   "none",
+	})
+	hitsBeforeCustomHeader := upstreamHits.Load()
+	badRes, badErr := svc.DeployAndRun(context.Background(), DeployAndRunInput{
+		SourceID:     "etcd_rel",
+		Kind:         KindData,
+		Executor:     ExecutorHTTPAPI,
+		TargetURL:    "https://api.example.org/releases",
+		SpecOrCode:   string(badSpecJSON),
+		OutputSchema: outSchema,
+		WaitMS:       1000,
+	}, "http://localhost:8080")
+	if badErr == nil {
+		t.Fatal("expected trial validation error on missing required fields")
+	}
+	if upstreamHits.Load() != hitsBeforeCustomHeader+1 {
+		t.Fatalf("expected custom-header APISpec to bypass plain probe cache (before=%d after=%d)", hitsBeforeCustomHeader, upstreamHits.Load())
+	}
+	if badRes.Drift == nil || badRes.Drift.Code != "SCHEMA_DRIFT_MISSING_FIELDS" || len(badRes.Drift.SampleRow) == 0 {
+		t.Fatalf("expected structured Drift.SampleRow on trial failure for human-style debugging, got %+v", badRes.Drift)
+	}
+	if bodySample, _ := badRes.Drift.SampleRow["body"].(string); len(bodySample) > pipeline.DefaultReceiptFieldChars+10 {
+		t.Fatalf("expected truncated sample row field, got %d chars", len(bodySample))
+	}
+	if badRes.ActiveVersion != 1 || badRes.IntactCachedRows != 4 {
+		t.Fatalf("expected intact state preserved on failed trial, got v=%d rows=%d", badRes.ActiveVersion, badRes.IntactCachedRows)
+	}
+	svc.Pipeline.WaitSnapshots()
+}
+
+func TestMultiPageTrialMinRowsAndMultiQueryViews(t *testing.T) {
+	db := testdb.Open(t)
+	if err := db.AutoMigrate(&taskmodel.CrawlTask{}, &taskmodel.TaskOutbox{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := pipeline.Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	prevDB := repository.DB
+	repository.DB = db
+	t.Cleanup(func() { repository.DB = prevDB })
+
+	var pageHits atomic.Int32
+	cfg := fetchgov.DefaultConfig()
+	cfg.RespectRobots = false
+	cfg.RequestsPerSec = 100
+	cfg.Burst = 100
+	cfg.RequesterFactory = func(acquisition.Policy) (fetchgov.Requester, error) {
+		return &apiStubRequester{fn: func(_ context.Context, opts acquisition.RequestOptions) (acquisition.Response, error) {
+			pageHits.Add(1)
+			parsedURL, _ := url.Parse(opts.URL)
+			if parsedURL != nil && parsedURL.Query().Get("page") == "2" {
+				if parsedURL.Query().Get("short") == "1" {
+					return acquisition.Response{
+						Body:    `[]`,
+						Receipt: acquisition.Receipt{URL: opts.URL, Status: 200, Headers: map[string]string{"content-type": "application/json"}},
+					}, nil
+				}
+				return acquisition.Response{
+					Body: `[
+						{"tag_name":"v3.7.2","published_at":"2026-09-01T00:00:00Z","body":"Release 3.7.2"},
+						{"tag_name":"v3.7.1","published_at":"2026-07-23T00:00:00Z","body":"Oldest release"}
+					]`,
+					Receipt: acquisition.Receipt{URL: opts.URL, Status: 200, Headers: map[string]string{"content-type": "application/json"}},
+				}, nil
+			}
+			return acquisition.Response{
+				Body: `[
+					{"tag_name":"v3.7.4","published_at":"2026-11-19T00:00:00Z","body":"See https://github.com/etcd-io/etcd/blob/main/CHANGELOG/CHANGELOG-3.7.md"},
+					{"tag_name":"v3.6.17","published_at":"2026-10-01T00:00:00Z","body":"Release 3.6.17"}
+				]`,
+				Receipt: acquisition.Receipt{URL: opts.URL, Status: 200, Headers: map[string]string{"content-type": "application/json"}},
+			}, nil
+		}}, nil
+	}
+	gov, err := fetchgov.NewSafeClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapDir := t.TempDir()
+	svc, err := NewService(db, gov, pipeline.NewStore(db, snapDir), ServiceConfig{SnapshotDir: snapDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.InlineExec = func(ctx context.Context, taskID uint64) error {
+		tRow, err := repository.GetCrawlTask(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		token, err := repository.ClaimCrawlTask(ctx, tRow, 30*time.Second, false)
+		if err != nil {
+			return err
+		}
+		tRow.RunToken = token
+		persist, execErr := svc.ExecuteConnectorTask(ctx, tRow)
+		st, fcode, lerr := taskmodel.StatusSucceeded, "", ""
+		if execErr != nil {
+			st, fcode, lerr = taskmodel.StatusFailed, "connector_exec", execErr.Error()
+		}
+		return repository.CompleteCrawlTask(ctx, tRow.ID, st, fcode, lerr, time.Now(), token, persist)
+	}
+
+	outSchema := json.RawMessage(`{
+		"fields": [
+			{"name":"tag_name","type":"string","required":true},
+			{"name":"published_at","type":"string","required":true},
+			{"name":"body","type":"source_text"}
+		],
+		"entity_keys": ["tag_name"],
+		"min_rows": 4
+	}`)
+	specJSON, _ := json.Marshal(APISpec{
+		URLTemplate:  "https://api.example.org/releases?per_page=2",
+		Method:       http.MethodGet,
+		ItemsPath:    "",
+		FieldMapping: map[string]string{"tag_name": "tag_name", "published_at": "published_at", "body": "body"},
+		Pagination:   "page",
+		PageParam:    "page",
+		MaxPages:     2,
+	})
+	// Deploy with min_rows=4 across 2 pages (2 rows/page) + multi-query views in ONE call.
+	res, err := svc.DeployAndRun(context.Background(), DeployAndRunInput{
+		SourceID:     "etcd_mp",
+		Kind:         KindData,
+		Executor:     ExecutorHTTPAPI,
+		SpecOrCode:   string(specJSON),
+		OutputSchema: outSchema,
+		WaitMS:       2000,
+		Queries: map[string]*pipeline.RecordQuery{
+			"timeline": {Fields: []string{"tag_name", "published_at"}, OrderBy: "published_at", GroupBy: "tag_name", GroupPrefix: 4, Limit: 10},
+			"v374":     {Where: []pipeline.FilterCondition{{Field: "tag_name", Op: "eq", Value: "v3.7.4"}}, ExtractURLs: &pipeline.URLExtractSpec{Field: "body"}, Limit: 1},
+		},
+	}, "http://localhost:8080")
+	if err != nil {
+		t.Fatalf("multi-page DeployAndRun with min_rows=4 should pass page-1 trial and fetch page 2, got err=%v res=%+v", err, res)
+	}
+	if res.Status != "succeeded" || res.Data == nil || res.Data.Mode != "multi_query" || res.Data.Total != 4 {
+		t.Fatalf("expected succeeded multi_query with 4 total rows, got res=%+v data=%+v", res, res.Data)
+	}
+	if pageHits.Load() != 2 {
+		t.Fatalf("expected exactly 2 upstream page fetches (no double fetch of page 1), got %d", pageHits.Load())
+	}
+	if res.Data.Views["timeline"].Records[0]["tag_name"] != "v3.7.1" || res.Data.Views["timeline"].Groups["v3.7"] != 3 {
+		t.Fatalf("unexpected timeline view: %+v", res.Data.Views["timeline"])
+	}
+	if len(res.Data.Views["v374"].ExtractedURLs) != 1 || !strings.Contains(res.Data.Views["v374"].ExtractedURLs[0], "CHANGELOG-3.7.md") {
+		t.Fatalf("unexpected v374 URL view: %+v", res.Data.Views["v374"])
+	}
+
+	// Warm cached multi-query RunConnector: 0 upstream HTTP calls!
+	warmRes, err := svc.RunConnector(context.Background(), RunConnectorInput{
+		SourceID:        "etcd_mp",
+		FreshnessTTLSec: 3600,
+		Queries: map[string]*pipeline.RecordQuery{
+			"oldest": {Fields: []string{"tag_name", "published_at"}, OrderBy: "published_at", Limit: 1},
+			"latest": {Fields: []string{"tag_name", "published_at"}, OrderBy: "-published_at", Limit: 1},
+		},
+	}, "http://localhost:8080")
+	if err != nil || warmRes.HitType != HitCacheHit || pageHits.Load() != 2 {
+		t.Fatalf("expected 0-HTTP multi_query cache hit, got res=%+v hits=%d err=%v", warmRes, pageHits.Load(), err)
+	}
+	if warmRes.Data.Views["oldest"].Records[0]["tag_name"] != "v3.7.1" || warmRes.Data.Views["latest"].Records[0]["tag_name"] != "v3.7.4" {
+		t.Fatalf("unexpected warm multi_query views: %+v", warmRes.Data.Views)
+	}
+
+	// Short multi-page run (page 2 returns 0 rows -> total 2 < min_rows 4) MUST still trigger drift after all pages finish.
+	shortSpecJSON, _ := json.Marshal(APISpec{
+		URLTemplate:  "https://api.example.org/releases?per_page=2&short=1",
+		Method:       http.MethodGet,
+		ItemsPath:    "",
+		FieldMapping: map[string]string{"tag_name": "tag_name", "published_at": "published_at", "body": "body"},
+		Pagination:   "page",
+		PageParam:    "page",
+		MaxPages:     2,
+	})
+	shortRes, _ := svc.DeployAndRun(context.Background(), DeployAndRunInput{
+		SourceID:     "etcd_short",
+		Kind:         KindData,
+		Executor:     ExecutorHTTPAPI,
+		SpecOrCode:   string(shortSpecJSON),
+		OutputSchema: outSchema,
+		WaitMS:       2000,
+	}, "http://localhost:8080")
+	if shortRes.Status != "failed" || !strings.Contains(shortRes.Error, "below expected min_rows 4") {
+		t.Fatalf("expected full-run min_rows drift on short multi-page connector, got %+v", shortRes)
+	}
+	svc.Pipeline.WaitSnapshots()
 }

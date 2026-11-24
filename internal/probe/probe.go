@@ -5,7 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
+	"gorelay/internal/acquisition"
 	"gorelay/internal/fetchgov"
 )
 
@@ -21,12 +24,79 @@ Functions:
 - checkpoint.save(cursor_table|nil, records_array) -- atomic batch upsert + CAS cursor advance (<=200 items/call)
 Return: return true, {items=records}`
 
+const probeCacheTTL = 60 * time.Second
+
+type cachedProbeResponse struct {
+	resp      acquisition.Response
+	expiresAt time.Time
+}
+
 type Prober struct {
 	client *fetchgov.SafeClient
+	mu     sync.Mutex
+	recent map[string]cachedProbeResponse
 }
 
 func NewProber(client *fetchgov.SafeClient) *Prober {
 	return &Prober{client: client}
+}
+
+func probeCacheKey(targetURL, authProfile string) string {
+	return strings.TrimSpace(authProfile) + "\x00" + strings.TrimSpace(targetURL)
+}
+
+func (p *Prober) rememberRecent(authProfile string, resp acquisition.Response, urls ...string) {
+	if p == nil || resp.Body == "" || resp.Receipt.Status < 200 || resp.Receipt.Status >= 300 {
+		return
+	}
+	now := time.Now()
+	exp := now.Add(probeCacheTTL)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.recent == nil {
+		p.recent = make(map[string]cachedProbeResponse)
+	}
+	for k, v := range p.recent {
+		if now.After(v.expiresAt) {
+			delete(p.recent, k)
+		}
+	}
+	for len(p.recent) >= 64 {
+		for k := range p.recent {
+			delete(p.recent, k)
+			break
+		}
+	}
+	for _, u := range urls {
+		if strings.TrimSpace(u) == "" {
+			continue
+		}
+		p.recent[probeCacheKey(u, authProfile)] = cachedProbeResponse{resp: resp, expiresAt: exp}
+	}
+}
+
+// LookupRecent returns a recently probed 2xx GET response within 60 seconds so
+// an immediate deploy_and_run trial validates without a duplicate HTTP fetch.
+func (p *Prober) LookupRecent(targetURL, authProfile string) (acquisition.Response, bool) {
+	if p == nil {
+		return acquisition.Response{}, false
+	}
+	key := probeCacheKey(targetURL, authProfile)
+	now := time.Now()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.recent == nil {
+		return acquisition.Response{}, false
+	}
+	entry, ok := p.recent[key]
+	if !ok {
+		return acquisition.Response{}, false
+	}
+	if now.After(entry.expiresAt) {
+		delete(p.recent, key)
+		return acquisition.Response{}, false
+	}
+	return entry.resp, true
 }
 
 func (p *Prober) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, error) {
@@ -34,9 +104,8 @@ func (p *Prober) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 		req.UseBrowser = "auto"
 	}
 	res := ProbeResult{
-		URL:                req.URL,
-		RobotsAllowed:      true,
-		LuaSandboxContract: CompactLuaContract,
+		URL:           req.URL,
+		RobotsAllowed: true,
 	}
 
 	resp, err := p.client.Fetch(ctx, fetchgov.FetchRequest{
@@ -62,6 +131,7 @@ func (p *Prober) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 	if res.FinalURL == "" {
 		res.FinalURL = req.URL
 	}
+	p.rememberRecent(req.AuthProfile, resp, req.URL, res.FinalURL)
 	res.Status = resp.Receipt.Status
 	res.ContentType = resp.Receipt.Headers["content-type"]
 
@@ -91,6 +161,7 @@ func (p *Prober) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 	if strings.Contains(lowerCT, "rss+xml") || strings.Contains(lowerCT, "atom+xml") || strings.Contains(trimmed, "<rss") || strings.Contains(trimmed, "<feed") {
 		res.Kind = "feed"
 		res.RecommendedExecutor = "lua_sandbox"
+		res.LuaSandboxContract = CompactLuaContract
 		return res, nil
 	}
 
@@ -137,9 +208,11 @@ func (p *Prober) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 	} else if spaShell {
 		res.Kind = "html_spa_candidate"
 		res.RecommendedExecutor = "lua_sandbox"
+		res.LuaSandboxContract = CompactLuaContract
 	} else {
 		res.Kind = "html_static"
 		res.RecommendedExecutor = "lua_sandbox"
+		res.LuaSandboxContract = CompactLuaContract
 	}
 	return res, nil
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -118,6 +119,7 @@ type ConnectorView struct {
 	LastVerifiedAt      *time.Time `json:"last_verified_at,omitempty"`
 	LastDriftReason     string     `json:"last_drift_reason,omitempty"`
 	FreshCacheAvailable bool       `json:"fresh_cache_available,omitempty"`
+	CachedRecords       int64      `json:"cached_records,omitempty"`
 	InputSchema         any        `json:"input_schema,omitempty"`
 	OutputSchema        any        `json:"output_schema,omitempty"`
 }
@@ -165,6 +167,39 @@ func (s *Service) ListSources(ctx context.Context, in ListSourcesInput) (ListSou
 	}
 
 	now := time.Now().UTC()
+	cachedCounts := make(map[string]int64, len(rows))
+	activeVersions := make(map[string]ConnectorVersion, len(rows))
+	if len(rows) > 0 {
+		ids := make([]string, 0, len(rows))
+		wantedVer := make(map[string]int, len(rows))
+		for _, c := range rows {
+			ids = append(ids, c.SourceID)
+			wantedVer[c.SourceID] = c.ActiveVersion
+		}
+		type countRow struct {
+			SourceID string
+			Cnt      int64
+		}
+		var counts []countRow
+		if err := s.DB.WithContext(ctx).Model(&pipeline.SourceRecord{}).
+			Select("source_id, COUNT(*) AS cnt").
+			Where("source_id IN ? AND is_current = ?", ids, true).
+			Group("source_id").Scan(&counts).Error; err == nil {
+			for _, cr := range counts {
+				cachedCounts[cr.SourceID] = cr.Cnt
+			}
+		}
+		var vers []ConnectorVersion
+		if err := s.DB.WithContext(ctx).
+			Select("source_id, version, input_schema, output_schema").
+			Where("source_id IN ?", ids).Find(&vers).Error; err == nil {
+			for _, v := range vers {
+				if wantedVer[v.SourceID] == v.Version {
+					activeVersions[v.SourceID] = v
+				}
+			}
+		}
+	}
 	out := ListSourcesPage{Connectors: make([]ConnectorView, 0, len(rows)), Total: total}
 	for _, c := range rows {
 		view := ConnectorView{
@@ -180,14 +215,14 @@ func (s *Service) ListSources(ctx context.Context, in ListSourcesInput) (ListSou
 			ConsecutiveFailures: c.ConsecutiveFailures,
 			LastVerifiedAt:      c.LastVerifiedAt,
 			LastDriftReason:     c.LastDriftReason,
+			CachedRecords:       cachedCounts[c.SourceID],
 		}
 		if in.FreshnessTTLSec > 0 && c.Status == StatusActive && c.LastVerifiedAt != nil {
 			if now.Sub(*c.LastVerifiedAt) <= time.Duration(in.FreshnessTTLSec)*time.Second {
 				view.FreshCacheAvailable = true
 			}
 		}
-		var ver ConnectorVersion
-		if err := s.DB.WithContext(ctx).First(&ver, "source_id = ? AND version = ?", c.SourceID, c.ActiveVersion).Error; err == nil {
+		if ver, ok := activeVersions[c.SourceID]; ok {
 			if ver.InputSchema != "" {
 				var m any
 				if json.Unmarshal([]byte(ver.InputSchema), &m) == nil {
@@ -218,36 +253,42 @@ type DeployAndRunInput struct {
 	SpecOrCode   string          `json:"spec_or_code"`
 	InputSchema  json.RawMessage `json:"input_schema,omitempty"`
 	OutputSchema json.RawMessage `json:"output_schema"`
-	Params       map[string]any  `json:"params,omitempty"`
-	AuthProfile  string          `json:"auth_profile,omitempty"`
-	WaitMS       int             `json:"wait_ms,omitempty"`
-	RollbackTo   int             `json:"rollback_to,omitempty"`
+	Params       map[string]any        `json:"params,omitempty"`
+	AuthProfile  string                `json:"auth_profile,omitempty"`
+	WaitMS       int                              `json:"wait_ms,omitempty"`
+	RollbackTo   int                              `json:"rollback_to,omitempty"`
+	Query        *pipeline.RecordQuery            `json:"query,omitempty"`
+	Queries      map[string]*pipeline.RecordQuery `json:"queries,omitempty"`
 }
 
 type RunConnectorInput struct {
-	SourceID        string         `json:"source_id"`
-	TargetURL       string         `json:"target_url,omitempty"`
-	Params          map[string]any `json:"params,omitempty"`
-	FreshnessTTLSec int            `json:"freshness_ttl,omitempty"`
-	Cursor          string         `json:"cursor,omitempty"`
-	WaitMS          int            `json:"wait_ms,omitempty"`
-	ForceRefresh    bool           `json:"force_refresh,omitempty"`
+	SourceID        string                           `json:"source_id"`
+	TargetURL       string                           `json:"target_url,omitempty"`
+	Params          map[string]any                   `json:"params,omitempty"`
+	FreshnessTTLSec int                              `json:"freshness_ttl,omitempty"`
+	Cursor          string                           `json:"cursor,omitempty"`
+	WaitMS          int                              `json:"wait_ms,omitempty"`
+	ForceRefresh    bool                             `json:"force_refresh,omitempty"`
+	Query           *pipeline.RecordQuery            `json:"query,omitempty"`
+	Queries         map[string]*pipeline.RecordQuery `json:"queries,omitempty"`
 }
 
 type ExecutionResponse struct {
-	JobID          uint64                  `json:"job_id,omitempty"`
-	SourceID       string                  `json:"source_id"`
-	Version        int                     `json:"version,omitempty"`
-	Executor       string                  `json:"executor,omitempty"`
-	Status         string                  `json:"status"` // succeeded | queued | running | failed | cancelled | degraded | cache_hit
-	HitType        string                  `json:"hit_type,omitempty"`
-	Terminal       bool                    `json:"terminal"`
-	Deduplicated   bool                    `json:"deduplicated,omitempty"`
-	LatencyMS      int64                   `json:"latency_ms,omitempty"`
-	RecordsSaved   int                     `json:"records_saved,omitempty"`
-	Data           *pipeline.DeliveredPage `json:"data,omitempty"`
-	Drift          *pipeline.DriftDiagnosis `json:"drift,omitempty"`
-	Error          string                  `json:"error,omitempty"`
+	JobID            uint64                   `json:"job_id,omitempty"`
+	SourceID         string                   `json:"source_id"`
+	Version          int                      `json:"version,omitempty"`
+	ActiveVersion    int                      `json:"active_version,omitempty"`
+	Executor         string                   `json:"executor,omitempty"`
+	Status           string                   `json:"status"` // succeeded | queued | running | failed | cancelled | degraded | cache_hit
+	HitType          string                   `json:"hit_type,omitempty"`
+	Terminal         bool                     `json:"terminal"`
+	Deduplicated     bool                     `json:"deduplicated,omitempty"`
+	LatencyMS        int64                    `json:"latency_ms,omitempty"`
+	RecordsSaved     int                      `json:"records_saved,omitempty"`
+	IntactCachedRows int64                    `json:"intact_cached_rows,omitempty"`
+	Data             *pipeline.DeliveredPage  `json:"data,omitempty"`
+	Drift            *pipeline.DriftDiagnosis `json:"drift,omitempty"`
+	Error            string                   `json:"error,omitempty"`
 }
 
 func (s *Service) DeployAndRun(ctx context.Context, in DeployAndRunInput, baseURL string) (ExecutionResponse, error) {
@@ -265,6 +306,8 @@ func (s *Service) DeployAndRun(ctx context.Context, in DeployAndRunInput, baseUR
 			Params:       in.Params,
 			WaitMS:       in.WaitMS,
 			ForceRefresh: true,
+			Query:        in.Query,
+			Queries:      in.Queries,
 		}, baseURL)
 	}
 
@@ -306,7 +349,9 @@ func (s *Service) DeployAndRun(ctx context.Context, in DeployAndRunInput, baseUR
 		}
 		trial, err = s.validateAPITrial(ctx, spec, in.Params, in.AuthProfile, parsedOut)
 		if err != nil {
-			return ExecutionResponse{}, fmt.Errorf("trial validation failed (connector not published): %w", err)
+			res := s.intactStateResponse(ctx, in.SourceID, "failed", err.Error())
+			res.Drift = trial.Drift
+			return res, fmt.Errorf("trial validation failed (connector not published): %w", err)
 		}
 		if b, mErr := json.Marshal(spec); mErr == nil {
 			in.SpecOrCode = string(b)
@@ -317,7 +362,9 @@ func (s *Service) DeployAndRun(ctx context.Context, in DeployAndRunInput, baseUR
 		}
 		trial, err = s.validateLuaTrial(ctx, targetURL, in.SpecOrCode, in.Params, in.AuthProfile, parsedOut)
 		if err != nil {
-			return ExecutionResponse{}, fmt.Errorf("trial validation failed (connector not published): %w", err)
+			res := s.intactStateResponse(ctx, in.SourceID, "failed", err.Error())
+			res.Drift = trial.Drift
+			return res, fmt.Errorf("trial validation failed (connector not published): %w", err)
 		}
 	}
 
@@ -443,6 +490,7 @@ func (s *Service) DeployAndRun(ctx context.Context, in DeployAndRunInput, baseUR
 			Records:          trial.Rows,
 			Evidence:         trial.Evidence,
 			RequireNonEmpty:  true,
+			SkipMinRows:      hasRemainingPages,
 		})
 		if err != nil {
 			return err
@@ -472,14 +520,14 @@ func (s *Service) DeployAndRun(ctx context.Context, in DeployAndRunInput, baseUR
 	}
 
 	if !hasRemainingPages {
-		return s.BuildJobResponse(ctx, jobID, "", baseURL)
+		return s.BuildJobResponseWithDelivery(ctx, jobID, "", baseURL, in.Query, in.Queries, false)
 	}
 	if s.InlineExec != nil {
 		if execErr := s.InlineExec(ctx, jobID); execErr != nil {
-			return s.BuildJobResponse(ctx, jobID, "", baseURL)
+			return s.BuildJobResponseWithDelivery(ctx, jobID, "", baseURL, in.Query, in.Queries, false)
 		}
 	}
-	return s.waitForTask(ctx, jobID, in.WaitMS, baseURL)
+	return s.waitForTask(ctx, jobID, in.WaitMS, baseURL, in.Query, in.Queries)
 }
 
 func (s *Service) RollbackVersion(ctx context.Context, sourceID string, targetVersion int) error {
@@ -514,15 +562,16 @@ func (s *Service) RunConnector(ctx context.Context, in RunConnectorInput, baseUR
 		return ExecutionResponse{}, err
 	}
 	targetURL := strings.TrimSpace(in.TargetURL)
+	urlOverridden := targetURL != "" && targetURL != conn.URLPattern
 	if targetURL == "" {
 		targetURL = conn.URLPattern
 	}
 
-	// Fast Cache Hit path when requested freshness TTL is satisfied and source is healthy.
-	if !in.ForceRefresh && in.FreshnessTTLSec > 0 && conn.Status == StatusActive && conn.LastVerifiedAt != nil {
+	// Fast Cache Hit path when requested freshness TTL is satisfied, target_url is not overridden, and source is healthy.
+	if !in.ForceRefresh && !urlOverridden && in.FreshnessTTLSec > 0 && conn.Status == StatusActive && conn.LastVerifiedAt != nil {
 		if time.Since(*conn.LastVerifiedAt) <= time.Duration(in.FreshnessTTLSec)*time.Second {
-			page, err := s.Pipeline.DeliverRecordsPage(ctx, conn.SourceID, 0, in.Cursor, pipeline.DefaultMCPResponseMaxBytes, pipeline.DefaultMCPPageSize, baseURL)
-			if err == nil && (page.Returned > 0 || in.Cursor != "") {
+			page, err := s.deliverStoredView(ctx, conn.SourceID, 0, in.Cursor, baseURL, in.Query, in.Queries, false)
+			if err == nil && (page.Returned > 0 || page.Total > 0 || in.Cursor != "") {
 				var latestTask taskmodel.CrawlTask
 				_ = s.DB.WithContext(ctx).Select("id").
 					Where("source_id = ? AND status = ?", conn.SourceID, taskmodel.StatusSucceeded).
@@ -535,15 +584,16 @@ func (s *Service) RunConnector(ctx context.Context, in RunConnectorInput, baseUR
 					LatencyMS: elapsed, SavedRows: page.Returned,
 				}).Error
 				return ExecutionResponse{
-					JobID:     latestTask.ID,
-					SourceID:  conn.SourceID,
-					Version:   conn.ActiveVersion,
-					Executor:  conn.Executor,
-					Status:    HitCacheHit,
-					HitType:   HitCacheHit,
-					Terminal:  true,
-					LatencyMS: elapsed,
-					Data:      &page,
+					JobID:         latestTask.ID,
+					SourceID:      conn.SourceID,
+					Version:       conn.ActiveVersion,
+					ActiveVersion: conn.ActiveVersion,
+					Executor:      conn.Executor,
+					Status:        HitCacheHit,
+					HitType:       HitCacheHit,
+					Terminal:      true,
+					LatencyMS:     elapsed,
+					Data:          &page,
 				}, nil
 			}
 		}
@@ -552,13 +602,16 @@ func (s *Service) RunConnector(ctx context.Context, in RunConnectorInput, baseUR
 	if conn.Status == StatusDegraded {
 		var drift DriftEvent
 		_ = s.DB.WithContext(ctx).Order("id DESC").First(&drift, "source_id = ?", conn.SourceID).Error
+		intact := s.countIntactCachedRows(ctx, conn.SourceID)
 		return ExecutionResponse{
-			SourceID: conn.SourceID,
-			Version:  conn.ActiveVersion,
-			Executor: conn.Executor,
-			Status:   StatusDegraded,
-			Terminal: true,
-			Error:    conn.LastDriftReason,
+			SourceID:         conn.SourceID,
+			Version:          conn.ActiveVersion,
+			ActiveVersion:    conn.ActiveVersion,
+			Executor:         conn.Executor,
+			Status:           StatusDegraded,
+			Terminal:         true,
+			IntactCachedRows: intact,
+			Error:            conn.LastDriftReason,
 			Drift: &pipeline.DriftDiagnosis{
 				Code:   drift.Code,
 				Reason: drift.Reason,
@@ -570,10 +623,10 @@ func (s *Service) RunConnector(ctx context.Context, in RunConnectorInput, baseUR
 	if conn.Executor == ExecutorHTTPAPI {
 		hitType = HitAPIReuse
 	}
-	return s.enqueueAndWait(ctx, conn.SourceID, conn.ActiveVersion, conn.Executor, targetURL, in.Params, hitType, in.WaitMS, baseURL)
+	return s.enqueueAndWait(ctx, conn.SourceID, conn.ActiveVersion, conn.Executor, targetURL, in.Params, hitType, in.WaitMS, baseURL, in.Query, in.Queries)
 }
 
-func (s *Service) enqueueAndWait(ctx context.Context, sourceID string, version int, executor, targetURL string, params map[string]any, hitType string, waitMS int, baseURL string) (ExecutionResponse, error) {
+func (s *Service) enqueueAndWait(ctx context.Context, sourceID string, version int, executor, targetURL string, params map[string]any, hitType string, waitMS int, baseURL string, query *pipeline.RecordQuery, queries map[string]*pipeline.RecordQuery) (ExecutionResponse, error) {
 	if params == nil {
 		params = map[string]any{}
 	}
@@ -588,7 +641,7 @@ func (s *Service) enqueueAndWait(ctx context.Context, sourceID string, version i
 	if err := s.DB.WithContext(ctx).
 		Where("active_dedup_key = ? AND status IN ?", dedupKey, []taskmodel.Status{taskmodel.StatusPending, taskmodel.StatusQueued, taskmodel.StatusRunning}).
 		Order("id DESC").First(&existing).Error; err == nil {
-		res, waitErr := s.waitForTask(ctx, existing.ID, waitMS, baseURL)
+		res, waitErr := s.waitForTask(ctx, existing.ID, waitMS, baseURL, query, queries)
 		res.Deduplicated = true
 		return res, waitErr
 	}
@@ -608,31 +661,87 @@ func (s *Service) enqueueAndWait(ctx context.Context, sourceID string, version i
 	}
 	if s.InlineExec != nil {
 		if execErr := s.InlineExec(ctx, taskRow.ID); execErr != nil {
-			return s.BuildJobResponse(ctx, taskRow.ID, "", baseURL)
+			return s.BuildJobResponseWithDelivery(ctx, taskRow.ID, "", baseURL, query, queries, false)
 		}
 	}
-	return s.waitForTask(ctx, taskRow.ID, waitMS, baseURL)
+	return s.waitForTask(ctx, taskRow.ID, waitMS, baseURL, query, queries)
 }
 
-func (s *Service) waitForTask(ctx context.Context, taskID uint64, waitMS int, baseURL string) (ExecutionResponse, error) {
+func (s *Service) waitForTask(ctx context.Context, taskID uint64, waitMS int, baseURL string, query *pipeline.RecordQuery, queries map[string]*pipeline.RecordQuery) (ExecutionResponse, error) {
 	if waitMS > 0 {
 		deadline := time.Now().Add(time.Duration(waitMS) * time.Millisecond)
 		for time.Now().Before(deadline) {
 			var cur taskmodel.CrawlTask
 			if err := s.DB.WithContext(ctx).First(&cur, taskID).Error; err == nil && cur.Status.IsTerminal() {
-				return s.BuildJobResponse(ctx, taskID, "", baseURL)
+				return s.BuildJobResponseWithDelivery(ctx, taskID, "", baseURL, query, queries, false)
 			}
 			select {
 			case <-ctx.Done():
-				return s.BuildJobResponse(context.Background(), taskID, "", baseURL)
-			case <-time.After(40 * time.Millisecond):
+				return s.BuildJobResponseWithDelivery(context.Background(), taskID, "", baseURL, query, queries, false)
+			case <-time.After(20 * time.Millisecond):
 			}
 		}
 	}
-	return s.BuildJobResponse(ctx, taskID, "", baseURL)
+	return s.BuildJobResponseWithDelivery(ctx, taskID, "", baseURL, query, queries, false)
+}
+
+func (s *Service) deliverStoredView(ctx context.Context, sourceID string, jobID uint64, cursor, baseURL string, query *pipeline.RecordQuery, queries map[string]*pipeline.RecordQuery, rawPage bool) (pipeline.DeliveredPage, error) {
+	var (
+		page pipeline.DeliveredPage
+		err  error
+	)
+	switch {
+	case len(queries) > 0:
+		page, err = s.Pipeline.DeliverRecordsMultiQuery(ctx, sourceID, jobID, s.Pipeline.QuerySafetyMaxBytes(), pipeline.DefaultMCPPageSize, baseURL, queries)
+	case query != nil && !query.IsEmpty():
+		page, err = s.Pipeline.DeliverRecordsPageWithQuery(ctx, sourceID, jobID, cursor, s.Pipeline.QuerySafetyMaxBytes(), pipeline.DefaultMCPPageSize, baseURL, query)
+	case rawPage:
+		page, err = s.Pipeline.DeliverRecordsPage(ctx, sourceID, jobID, cursor, pipeline.DefaultMCPResponseMaxBytes, pipeline.DefaultMCPPageSize, baseURL)
+	default:
+		page, err = s.Pipeline.DeliverReceipt(ctx, sourceID, jobID, baseURL)
+	}
+	if err == nil {
+		// Parent ExecutionResponse already carries top-level source_id and job_id.
+		page.SourceID = ""
+		page.JobID = 0
+	}
+	return page, err
+}
+
+func (s *Service) countIntactCachedRows(ctx context.Context, sourceID string) int64 {
+	if strings.TrimSpace(sourceID) == "" {
+		return 0
+	}
+	var cnt int64
+	_ = s.DB.WithContext(ctx).Model(&pipeline.SourceRecord{}).
+		Where("source_id = ? AND is_current = ?", sourceID, true).Count(&cnt).Error
+	return cnt
+}
+
+func (s *Service) intactStateResponse(ctx context.Context, sourceID, status, errMsg string) ExecutionResponse {
+	res := ExecutionResponse{
+		SourceID: sourceID,
+		Status:   status,
+		Terminal: true,
+		Error:    errMsg,
+	}
+	if strings.TrimSpace(sourceID) == "" {
+		return res
+	}
+	var conn Connector
+	if err := s.DB.WithContext(ctx).Select("active_version, executor").First(&conn, "source_id = ?", sourceID).Error; err == nil {
+		res.ActiveVersion = conn.ActiveVersion
+		res.Executor = conn.Executor
+		res.IntactCachedRows = s.countIntactCachedRows(ctx, sourceID)
+	}
+	return res
 }
 
 func (s *Service) BuildJobResponse(ctx context.Context, taskID uint64, cursor, baseURL string) (ExecutionResponse, error) {
+	return s.BuildJobResponseWithDelivery(ctx, taskID, cursor, baseURL, nil, nil, true)
+}
+
+func (s *Service) BuildJobResponseWithDelivery(ctx context.Context, taskID uint64, cursor, baseURL string, query *pipeline.RecordQuery, queries map[string]*pipeline.RecordQuery, rawPage bool) (ExecutionResponse, error) {
 	var t taskmodel.CrawlTask
 	if err := s.DB.WithContext(ctx).First(&t, taskID).Error; err != nil {
 		return ExecutionResponse{}, err
@@ -653,20 +762,26 @@ func (s *Service) BuildJobResponse(ctx context.Context, taskID uint64, cursor, b
 		jobFilter := t.ID
 		if t.RecordsSaved == 0 {
 			// All rows matched prior content_hash (unchanged warm refresh/rollback):
-			// deliver the source's current active view seamlessly across pages.
+			// deliver the source's current active view seamlessly.
 			jobFilter = 0
 		}
-		page, err := s.Pipeline.DeliverRecordsPage(ctx, t.SourceID, jobFilter, cursor, pipeline.DefaultMCPResponseMaxBytes, pipeline.DefaultMCPPageSize, baseURL)
+		page, err := s.deliverStoredView(ctx, t.SourceID, jobFilter, cursor, baseURL, query, queries, rawPage)
 		if err != nil {
 			return out, err
 		}
-		if page.Returned == 0 && jobFilter != 0 && cursor == "" {
-			page, err = s.Pipeline.DeliverRecordsPage(ctx, t.SourceID, 0, cursor, pipeline.DefaultMCPResponseMaxBytes, pipeline.DefaultMCPPageSize, baseURL)
+		if page.Returned == 0 && page.Total == 0 && jobFilter != 0 && cursor == "" {
+			page, err = s.deliverStoredView(ctx, t.SourceID, 0, cursor, baseURL, query, queries, rawPage)
 			if err != nil {
 				return out, err
 			}
 		}
 		out.Data = &page
+	} else if t.Status == taskmodel.StatusFailed || t.Status == taskmodel.StatusCancelled {
+		var conn Connector
+		if err := s.DB.WithContext(ctx).Select("active_version").First(&conn, "source_id = ?", t.SourceID).Error; err == nil {
+			out.ActiveVersion = conn.ActiveVersion
+		}
+		out.IntactCachedRows = s.countIntactCachedRows(ctx, t.SourceID)
 	}
 	if t.FailureCode == "silent_drift" {
 		var drift DriftEvent
@@ -711,9 +826,18 @@ func (s *Service) ExecuteConnectorTask(ctx context.Context, t taskmodel.CrawlTas
 		_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
 	}
 
+	var connMeta Connector
+	var isTargetOverride bool
+	if err := s.DB.WithContext(ctx).Select("url_pattern").First(&connMeta, "source_id = ?", t.SourceID).Error; err == nil {
+		if t.URL != "" && connMeta.URLPattern != "" && t.URL != connMeta.URLPattern {
+			isTargetOverride = true
+		}
+	}
+
 	var batchCount int
 	var totalSaved int
 	var lastBatchErr error
+	var isPaginatedAPI bool
 	cpHooks := &engine.CheckpointHooks{
 		Get: func(ctx context.Context) (any, error) {
 			var cur taskmodel.CrawlTask
@@ -739,7 +863,9 @@ func (s *Service) ExecuteConnectorTask(ctx context.Context, t taskmodel.CrawlTas
 					cpStr = string(raw)
 				}
 			}
-			saveErr := s.commitBatchCAS(ctx, t, ver, outSchema, cpStr, records, evidence, batchCount == 1 && cursor == nil, &totalSaved)
+			skipMinRows := isPaginatedAPI || cursor != nil
+			requireNonEmpty := t.RecordsSaved == 0 && batchCount == 1 && cursor == nil
+			saveErr := s.commitBatchCAS(ctx, t, ver, outSchema, cpStr, records, evidence, requireNonEmpty, !isTargetOverride, skipMinRows, &totalSaved)
 			if saveErr != nil {
 				lastBatchErr = saveErr
 			}
@@ -755,12 +881,38 @@ func (s *Service) ExecuteConnectorTask(ctx context.Context, t taskmodel.CrawlTas
 		if err := json.Unmarshal([]byte(ver.SpecOrCode), &spec); err != nil {
 			return nil, err
 		}
+		if isTargetOverride {
+			spec.URLTemplate = t.URL
+			if !strings.Contains(t.URL, "{") {
+				spec.Pagination = "none"
+				spec.MaxPages = 1
+			}
+		} else if spec.Pagination != "" && !strings.EqualFold(spec.Pagination, "none") && spec.MaxPages != 1 {
+			isPaginatedAPI = true
+		}
 		finalRows, finalEvidence, err = ExecuteHTTPAPI(ctx, s.SafeClient, spec, params, ver.AuthProfileRef, 0, cpHooks)
 		if err != nil {
 			if lastBatchErr != nil && (errors.Is(lastBatchErr, pipeline.ErrSilentDrift) || errors.Is(lastBatchErr, repository.ErrTaskTransitionConflict)) {
 				return nil, fmt.Errorf("%w: %v", lastBatchErr, err)
 			}
 			return nil, err
+		}
+		if isPaginatedAPI && outSchema.MinRows > 0 {
+			totalJobRows := t.RecordsSaved + len(finalRows)
+			if totalJobRows < outSchema.MinRows {
+				drift := &pipeline.DriftDiagnosis{
+					Code:      "ROW_COUNT_BELOW_BASELINE",
+					Reason:    fmt.Sprintf("yielded %d rows across pages, below expected min_rows %d", totalJobRows, outSchema.MinRows),
+					TotalRows: totalJobRows,
+				}
+				if len(finalRows) > 0 {
+					drift.SampleRow = finalRows[0]
+				}
+				if !isTargetOverride {
+					_ = s.recordDriftFailure(ctx, t, ver, compactDriftSample(drift))
+				}
+				return nil, fmt.Errorf("%w: %s", pipeline.ErrSilentDrift, drift.Reason)
+			}
 		}
 	case ExecutorLuaSandbox:
 		finalRows, finalEvidence, err = s.runSandboxedLua(ctx, t, ver, params, cpHooks)
@@ -771,7 +923,7 @@ func (s *Service) ExecuteConnectorTask(ctx context.Context, t taskmodel.CrawlTas
 			return nil, err
 		}
 		if batchCount == 0 {
-			if cerr := s.commitBatchCAS(ctx, t, ver, outSchema, "", finalRows, finalEvidence, true, &totalSaved); cerr != nil {
+			if cerr := s.commitBatchCAS(ctx, t, ver, outSchema, "", finalRows, finalEvidence, true, !isTargetOverride, false, &totalSaved); cerr != nil {
 				return nil, cerr
 			}
 		}
@@ -816,6 +968,8 @@ func (s *Service) commitBatchCAS(
 	records []map[string]any,
 	evidence []acquisition.Response,
 	requireNonEmpty bool,
+	allowDegrade bool,
+	skipMinRows bool,
 	totalSaved *int,
 ) error {
 	var detectedDrift *pipeline.DriftDiagnosis
@@ -836,6 +990,7 @@ func (s *Service) commitBatchCAS(
 			Evidence:         evidence,
 			AllowEmptyBatch:  !requireNonEmpty,
 			RequireNonEmpty:  requireNonEmpty,
+			SkipMinRows:      skipMinRows,
 		})
 		if err != nil {
 			if errors.Is(err, pipeline.ErrSilentDrift) && ingestRes.Drift != nil {
@@ -847,7 +1002,7 @@ func (s *Service) commitBatchCAS(
 		*totalSaved += changed
 		return repository.UpdateCrawlTaskCheckpointCAS(ctx, tx, t.ID, t.RunToken, cpJSON, changed)
 	})
-	if err != nil && detectedDrift != nil {
+	if err != nil && detectedDrift != nil && allowDegrade {
 		// Record drift diagnosis and degraded connector status in a SEPARATE
 		// committed transaction after the ingestion transaction rolls back,
 		// ensuring prior good records remain untouched while drift metadata persists.
@@ -905,6 +1060,27 @@ type trialOutcome struct {
 	Evidence   []acquisition.Response
 	NextCursor any
 	LatencyMS  int64
+	Drift      *pipeline.DriftDiagnosis
+}
+
+func compactDriftSample(drift *pipeline.DriftDiagnosis) *pipeline.DriftDiagnosis {
+	if drift == nil || len(drift.SampleRow) == 0 {
+		return drift
+	}
+	cp := *drift
+	sample := make(map[string]any, len(drift.SampleRow))
+	for k, v := range drift.SampleRow {
+		if s, ok := v.(string); ok {
+			runes := []rune(s)
+			if len(runes) > pipeline.DefaultReceiptFieldChars {
+				sample[k] = string(runes[:pipeline.DefaultReceiptFieldChars]) + "..."
+				continue
+			}
+		}
+		sample[k] = v
+	}
+	cp.SampleRow = sample
+	return &cp
 }
 
 func (s *Service) validateAPITrial(ctx context.Context, spec APISpec, params map[string]any, authProfile string, schema contract.OutputSchema) (trialOutcome, error) {
@@ -916,15 +1092,30 @@ func (s *Service) validateAPITrial(ctx context.Context, spec APISpec, params map
 			return nil
 		},
 	}
-	rows, evidence, err := ExecuteHTTPAPI(ctx, s.SafeClient, spec, params, authProfile, 1, cp)
+	fetchWithProbeCache := func(fctx context.Context, req fetchgov.FetchRequest) (acquisition.Response, error) {
+		if (req.Method == "" || strings.EqualFold(req.Method, http.MethodGet)) && len(req.Headers) == 0 && s.Prober != nil {
+			if cached, ok := s.Prober.LookupRecent(req.URL, req.AuthProfile); ok {
+				cached.Receipt.ReusedSnapshot = true
+				return cached, nil
+			}
+		}
+		return s.SafeClient.Fetch(fctx, req)
+	}
+	rows, evidence, err := executeHTTPAPIWithFetch(ctx, s.SafeClient, spec, params, authProfile, 1, cp, fetchWithProbeCache)
 	if err != nil {
 		return trialOutcome{}, err
 	}
-	if drift := pipeline.CheckSilentDrift(rows, schema, evidence, false); drift != nil {
-		return trialOutcome{}, fmt.Errorf("%s: %s", drift.Code, drift.Reason)
-	}
 	if spec.MaxPages == 1 {
 		nextCursor = nil
+	}
+	trialSchema := schema
+	if nextCursor != nil && trialSchema.MinRows > 1 {
+		// Multi-page trial validates page 1 schema & non-empty yield without double-fetching;
+		// full min_rows is enforced once all remaining pages complete in ExecuteConnectorTask.
+		trialSchema.MinRows = 1
+	}
+	if drift := pipeline.CheckSilentDrift(rows, trialSchema, evidence, false); drift != nil {
+		return trialOutcome{Drift: compactDriftSample(drift)}, fmt.Errorf("%s: %s", drift.Code, drift.Reason)
 	}
 	return trialOutcome{
 		Rows:       rows,
@@ -936,6 +1127,13 @@ func (s *Service) validateAPITrial(ctx context.Context, spec APISpec, params map
 
 func (s *Service) validateLuaTrial(ctx context.Context, targetURL, code string, params map[string]any, authProfile string, schema contract.OutputSchema) (trialOutcome, error) {
 	started := time.Now()
+	var seedSnaps map[string]acquisition.Response
+	if s.Prober != nil {
+		if cached, ok := s.Prober.LookupRecent(targetURL, authProfile); ok && cached.Receipt.SnapshotKey != "" {
+			cached.Receipt.ReusedSnapshot = true
+			seedSnaps = map[string]acquisition.Response{cached.Receipt.SnapshotKey: cached}
+		}
+	}
 	req := programrunner.Request{
 		Program: engine.ProgramRequest{
 			Code:              code,
@@ -952,11 +1150,19 @@ func (s *Service) validateLuaTrial(ctx context.Context, targetURL, code string, 
 		},
 		AuthProfile:   authProfile,
 		RespectRobots: s.Cfg.RespectRobots,
+		Snapshots:     seedSnaps,
 	}
 	var result engine.ProgramResult
 	var err error
 	if s.Runner != nil {
-		result, err = s.Runner.Execute(ctx, req)
+		runCtx := ctx
+		if len(seedSnaps) > 0 {
+			if sharedCtx, cleanup, sErr := s.Runner.ShareSnapshots(ctx, seedSnaps); sErr == nil && cleanup != nil {
+				defer cleanup()
+				runCtx = sharedCtx
+			}
+		}
+		result, err = s.Runner.Execute(runCtx, req)
 	} else {
 		var resp programrunner.Response
 		resp, err = programrunner.RunWithClient(ctx, req, nil, nil, s.SafeClient)
@@ -972,7 +1178,7 @@ func (s *Service) validateLuaTrial(ctx context.Context, targetURL, code string, 
 		rows = result.CheckpointedItems
 	}
 	if drift := pipeline.CheckSilentDrift(rows, schema, result.SourceEvidence, false); drift != nil {
-		return trialOutcome{}, fmt.Errorf("%s: %s", drift.Code, drift.Reason)
+		return trialOutcome{Drift: compactDriftSample(drift)}, fmt.Errorf("%s: %s", drift.Code, drift.Reason)
 	}
 	return trialOutcome{
 		Rows:       rows,

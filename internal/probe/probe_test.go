@@ -113,4 +113,17 @@ func TestProberDetectsEmbeddedAndXHRCandidatesOnSPA(t *testing.T) {
 	if len(out.LuaSandboxContract) > 1200 {
 		t.Fatalf("lua contract unexpectedly bloated: %d chars", len(out.LuaSandboxContract))
 	}
+
+	// Verify 60s short-lived probe response cache hits with exact URL/finalURL.
+	cached, ok := NewProber(client).LookupRecent("https://app.example.com", "")
+	if ok || cached.Body != "" {
+		t.Fatal("fresh prober must start with empty cache")
+	}
+	p2 := NewProber(client)
+	if _, err := p2.Probe(context.Background(), ProbeRequest{URL: "https://app.example.com", UseBrowser: "never"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := p2.LookupRecent("https://app.example.com", ""); !ok || !strings.Contains(got.Body, "root") {
+		t.Fatalf("expected LookupRecent cache hit after Probe, got ok=%v body=%q", ok, got.Body)
+	}
 }

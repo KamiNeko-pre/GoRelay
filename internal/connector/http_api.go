@@ -34,8 +34,25 @@ func ExecuteHTTPAPI(
 	maxPagesOverride int,
 	cp *engine.CheckpointHooks,
 ) ([]map[string]any, []acquisition.Response, error) {
-	if client == nil {
+	return executeHTTPAPIWithFetch(ctx, client, spec, params, authProfile, maxPagesOverride, cp, nil)
+}
+
+func executeHTTPAPIWithFetch(
+	ctx context.Context,
+	client *fetchgov.SafeClient,
+	spec APISpec,
+	params map[string]any,
+	authProfile string,
+	maxPagesOverride int,
+	cp *engine.CheckpointHooks,
+	fetchOverride func(context.Context, fetchgov.FetchRequest) (acquisition.Response, error),
+) ([]map[string]any, []acquisition.Response, error) {
+	if client == nil && fetchOverride == nil {
 		return nil, nil, fmt.Errorf("safe client is required for http_api execution")
+	}
+	fetchFn := fetchOverride
+	if fetchFn == nil {
+		fetchFn = client.Fetch
 	}
 	if strings.TrimSpace(spec.URLTemplate) == "" {
 		return nil, nil, fmt.Errorf("api_spec.url_template is required")
@@ -104,7 +121,7 @@ func ExecuteHTTPAPI(
 			break
 		}
 
-		resp, err := client.Fetch(ctx, fetchgov.FetchRequest{
+		resp, err := fetchFn(ctx, fetchgov.FetchRequest{
 			URL:         targetURL,
 			Method:      method,
 			Headers:     spec.Headers,
@@ -116,6 +133,13 @@ func ExecuteHTTPAPI(
 		}
 		allEvidence = append(allEvidence, resp)
 		if resp.Receipt.Status < 200 || resp.Receipt.Status >= 300 {
+			excerpt := strings.TrimSpace(pipeline.SanitizeText(resp.Body))
+			if len(excerpt) > 300 {
+				excerpt = excerpt[:300]
+			}
+			if excerpt != "" {
+				return allRows, allEvidence, fmt.Errorf("http_api status %d on %s: %s", resp.Receipt.Status, targetURL, excerpt)
+			}
 			return allRows, allEvidence, fmt.Errorf("http_api status %d on %s", resp.Receipt.Status, targetURL)
 		}
 

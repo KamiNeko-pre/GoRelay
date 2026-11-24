@@ -46,18 +46,18 @@ type DraftAPISpec struct {
 }
 
 type ProbeResult struct {
-	URL                 string              `json:"url"`
-	FinalURL            string              `json:"final_url"`
-	Status              int                 `json:"status"`
-	ContentType         string              `json:"content_type"`
-	Kind                string              `json:"kind"` // "json_api" | "feed" | "html_static" | "html_spa_candidate" | "blocked"
-	RobotsAllowed       bool                `json:"robots_allowed"`
-	CandidateAPIs       []CandidateAPI      `json:"candidate_apis,omitempty"`
-	JSONSummary         *JSONSummary        `json:"json_summary,omitempty"`
-	DOMSelectors        []DOMSelectorSample `json:"dom_selectors,omitempty"`
-	RecommendedExecutor string              `json:"recommended_executor"` // "http_api" | "lua_sandbox"
-	DraftAPISpec        *DraftAPISpec       `json:"draft_api_spec,omitempty"`
-	LuaSandboxContract  string              `json:"lua_sandbox_contract"`
+	URL                 string                          `json:"url"`
+	FinalURL            string                          `json:"final_url,omitempty"`
+	Status              int                             `json:"status,omitempty"`
+	ContentType         string                          `json:"content_type,omitempty"`
+	Kind                string                          `json:"kind"` // "json_api" | "feed" | "html_static" | "html_spa_candidate" | "blocked"
+	RobotsAllowed       bool                            `json:"robots_allowed"`
+	CandidateAPIs       []CandidateAPI                  `json:"candidate_apis,omitempty"`
+	JSONSummary         *JSONSummary                    `json:"json_summary,omitempty"`
+	DOMSelectors        []DOMSelectorSample             `json:"dom_selectors,omitempty"`
+	RecommendedExecutor string                          `json:"recommended_executor,omitempty"` // "http_api" | "lua_sandbox"
+	DraftAPISpec        *DraftAPISpec                   `json:"draft_api_spec,omitempty"`
+	LuaSandboxContract  string                          `json:"lua_sandbox_contract,omitempty"`
 	NetworkCaptures     []acquisition.NetworkAPICapture `json:"network_captures,omitempty"`
-	Warnings            []string            `json:"warnings,omitempty"`
+	Warnings            []string                        `json:"warnings,omitempty"`
 }
